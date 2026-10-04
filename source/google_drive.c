@@ -5,6 +5,9 @@
 #include <strings.h>
 #include <math.h>
 #include <time.h>
+#include <ctype.h>
+#include <errno.h>
+#include <sys/stat.h>
 #include <SDL2/SDL.h>
 #include <curl/curl.h>
 #include "cJSON.h"
@@ -13,6 +16,8 @@
 #include "google_store.h"
 
 #define SCOPE "https://www.googleapis.com/auth/drive.file"
+#define DISCOVERY_URL "https://accounts.google.com/.well-known/openid-configuration"
+#define CA_PATH "/mnt/sandbox/PSSY00001_000/app0/assets/google/cacert.pem"
 #define TOKEN_URL "https://oauth2.googleapis.com/token"
 #define DEVICE_URL "https://oauth2.googleapis.com/device/code"
 #define LIST_URL "https://www.googleapis.com/drive/v3/files?pageSize=1&fields=files(id)"
@@ -42,6 +47,78 @@ static void message(const char *s)
 {
     SDL_LockMutex(lock);
     snprintf(state.message, sizeof(state.message), "%s", s);
+    SDL_UnlockMutex(lock);
+}
+
+static void diagnostic_text(char *out, size_t capacity, const char *text)
+{
+    size_t i = 0;
+    if (!text) text = "unavailable";
+    for (; text[i] && i + 1 < capacity; i++) {
+        unsigned char c = (unsigned char)text[i];
+        out[i] = c >= 32 && c <= 126 ? (char)c : ' ';
+    }
+    out[i] = 0;
+}
+
+/* Never copy arbitrary error-buffer text into the UI. In particular, proxy
+   URLs, credentials, headers, and server-supplied strings must stay private.
+   Show only recognized reasons and a strictly formatted mbedTLS error code. */
+static void discovery_error_detail(char *out, size_t capacity, const char *error)
+{
+    char lower[CURL_ERROR_SIZE] = {0};
+    size_t i = 0;
+    for (; error[i] && i + 1 < sizeof(lower); i++)
+        lower[i] = (char)tolower((unsigned char)error[i]);
+    const char *reason = error[0] ? "Unrecognized error details withheld." : "No libcurl error detail.";
+    if (strstr(lower, "authorization") || strstr(lower, "bearer") || strstr(lower, "secret") ||
+        strstr(lower, "token") || strstr(lower, "password") || strstr(lower, "passwd"))
+        reason = "Sensitive error details withheld.";
+    else if (strstr(lower, "resolve proxy")) reason = "Proxy hostname resolution failed.";
+    else if (strstr(lower, "resolve host")) reason = "Google hostname resolution failed.";
+    else if (strstr(lower, "subject name") || strstr(lower, "hostname mismatch")) reason = "Certificate hostname mismatch.";
+    else if (strstr(lower, "ca cert file") || strstr(lower, "cafile") || strstr(lower, "ca file")) reason = "CA certificate file could not be loaded.";
+    else if (strstr(lower, "certificate") || strstr(lower, "x509")) reason = "Certificate verification failed.";
+    else if (strstr(lower, "timed out") || strstr(lower, "timeout")) reason = "Request timed out.";
+    else if (strstr(lower, "connect")) reason = "Connection failed.";
+    else if (strstr(lower, "handshake") || strstr(lower, "mbedtls") || strstr(lower, "ssl")) reason = "TLS negotiation failed.";
+    char backend_code[16] = {0};
+    const char *code = strstr(lower, "mbedtls: (-0x");
+    if (code) {
+        code += strlen("mbedtls: (");
+        size_t n = 3;
+        while (n < 11 && isxdigit((unsigned char)code[n])) n++;
+        if (n > 3 && code[n] == ')' && !strstr(reason, "withheld")) {
+            memcpy(backend_code, code, n);
+            backend_code[n] = 0;
+        }
+    }
+    snprintf(out, capacity, "%s%s%s", reason, backend_code[0] ? " Backend code: " : "", backend_code);
+    wipe(lower, sizeof(lower));
+}
+
+static void discovery_context(const char *error)
+{
+    struct stat info;
+    int exists = stat(CA_PATH, &info) == 0;
+    int stat_error = exists ? 0 : errno;
+    int readable = 0;
+    FILE *ca = fopen(CA_PATH, "rb");
+    if (ca) {
+        (void)fgetc(ca);
+        readable = !ferror(ca);
+        if (fclose(ca) != 0) readable = 0;
+    }
+    curl_version_info_data *version = curl_version_info(CURLVERSION_FIRST);
+    char curl_version[48], tls[64], details[144], context[384];
+    diagnostic_text(curl_version, sizeof(curl_version), version ? version->version : NULL);
+    diagnostic_text(tls, sizeof(tls), version ? version->ssl_version : NULL);
+    discovery_error_detail(details, sizeof(details), error);
+    snprintf(context, sizeof(context), "CA: exists=%s; readable=%s\nlibcurl: %s\nTLS backend: %s\nDetails: %s",
+        exists ? "yes" : (stat_error == ENOENT ? "no" : "unknown"), readable ? "yes" : "no",
+        curl_version, tls, details);
+    SDL_LockMutex(lock);
+    snprintf(state.discovery_details, sizeof(state.discovery_details), "%s", context);
     SDL_UnlockMutex(lock);
 }
 
@@ -94,25 +171,33 @@ static cJSON *request(const char *url, const char *form, const char *access, lon
     struct curl_slist *headers = NULL;
     response_buffer b = {calloc(1, RESPONSE_CAP + 1), 0};
     char auth[TOKEN_CAP + 32] = {0};
+    /* Stack lifetime includes easy_cleanup; this is never emitted for OAuth,
+       refresh, or authenticated Drive requests. */
+    char error[CURL_ERROR_SIZE] = {0};
+    int discovery = !form && !access && !strcmp(url, DISCOVERY_URL);
+    CURLcode result = CURLE_OK;
+    const char *failure = NULL, *failed_option = NULL;
     cJSON *json = NULL;
     *status = 0;
-    if (!curl || !b.data) goto done;
+    if (!curl || !b.data) { result = CURLE_OUT_OF_MEMORY; failure = "initialization"; goto done; }
     headers = curl_slist_append(NULL, "Accept: application/json");
-    if (!headers) goto done;
+    if (!headers) { result = CURLE_OUT_OF_MEMORY; failure = "initialization"; goto done; }
     if (access) {
         snprintf(auth, sizeof(auth), "Authorization: Bearer %s", access);
         struct curl_slist *next = curl_slist_append(headers, auth);
         if (!next) goto done;
         headers = next;
     }
-#define OPT(k,v) if (curl_easy_setopt(curl, k, v) != CURLE_OK) goto done
+#define OPT(k,v) do { result = curl_easy_setopt(curl, k, v); \
+    if (result != CURLE_OK) { failure = "setup"; failed_option = #k; goto done; } } while (0)
+    if (discovery) { OPT(CURLOPT_ERRORBUFFER, error); }
     OPT(CURLOPT_URL, url);
     OPT(CURLOPT_PROTOCOLS, (long)CURLPROTO_HTTPS);
     OPT(CURLOPT_REDIR_PROTOCOLS, (long)CURLPROTO_HTTPS);
     OPT(CURLOPT_FOLLOWLOCATION, 0L);
     OPT(CURLOPT_SSL_VERIFYPEER, 1L);
     OPT(CURLOPT_SSL_VERIFYHOST, 2L);
-    OPT(CURLOPT_CAINFO, "/mnt/sandbox/PSSY00001_000/app0/assets/google/cacert.pem");
+    OPT(CURLOPT_CAINFO, CA_PATH);
     OPT(CURLOPT_SSLVERSION, (long)CURL_SSLVERSION_TLSv1_2);
     OPT(CURLOPT_VERBOSE, 0L);
     OPT(CURLOPT_NOSIGNAL, 1L);
@@ -124,13 +209,33 @@ static cJSON *request(const char *url, const char *form, const char *access, lon
     OPT(CURLOPT_NOPROGRESS, 0L);
     OPT(CURLOPT_XFERINFOFUNCTION, progress);
     if (form) { OPT(CURLOPT_POSTFIELDS, form); }
-    if (SDL_AtomicGet(&cancelled) || curl_easy_perform(curl) != CURLE_OK) goto done;
-    if (curl_easy_getinfo(curl, CURLINFO_RESPONSE_CODE, status) != CURLE_OK) goto done;
+    result = SDL_AtomicGet(&cancelled) ? CURLE_ABORTED_BY_CALLBACK : curl_easy_perform(curl);
+    if (result != CURLE_OK) { failure = "transport"; goto done; }
+    result = curl_easy_getinfo(curl, CURLINFO_RESPONSE_CODE, status);
+    if (result != CURLE_OK) { failure = "HTTP status lookup"; goto done; }
+    if (discovery && *status != 200) { failure = "HTTP"; goto done; }
     json = cJSON_ParseWithOpts(b.data, NULL, 1);
-    if (!cJSON_IsObject(json)) { release(json); json = NULL; }
+    if (!cJSON_IsObject(json)) { failure = "JSON"; release(json); json = NULL; }
 done:
     /* Keep callback/form/header storage alive until the easy handle is gone. */
     if (curl) curl_easy_cleanup(curl);
+    if (discovery) {
+        discovery_context(error);
+        if (failure) {
+            char summary[192], description[96];
+            diagnostic_text(description, sizeof(description), curl_easy_strerror(result));
+            if (!strcmp(failure, "HTTP"))
+                snprintf(summary, sizeof(summary), "Google discovery: HTTP %ld (expected 200).", *status);
+            else if (!strcmp(failure, "JSON"))
+                snprintf(summary, sizeof(summary), "Google discovery: malformed JSON or non-object response.");
+            else if (failed_option)
+                snprintf(summary, sizeof(summary), "Discovery setup failed: %s. curl %d: %s", failed_option, (int)result, description);
+            else
+                snprintf(summary, sizeof(summary), "Discovery %s failed. curl %d: %s", failure, (int)result, description);
+            message(summary);
+        }
+    }
+    wipe(error, sizeof(error));
     if (b.data) { wipe(b.data, RESPONSE_CAP + 1); free(b.data); }
     wipe(auth, sizeof(auth));
     /* curl's header copy contains the access token. */
@@ -246,12 +351,17 @@ static int authorize(char *access, char *refresh)
     long status = 0;
     char device[TOKEN_CAP] = {0}, url[256], code[64], endpoint[256];
     int ok = 0;
-    cJSON *j = request("https://accounts.google.com/.well-known/openid-configuration", NULL, NULL, &status);
-    if (status != 200 || !copy_string(j, "device_authorization_endpoint", endpoint, sizeof(endpoint), 1) ||
-        strcmp(endpoint, DEVICE_URL)) {
-        message("Google discovery failed. Check network, TLS certificates, and console clock.");
+    cJSON *j = request(DISCOVERY_URL, NULL, NULL, &status);
+    if (status != 200 || !j) goto done; /* Preserve request's precise diagnostic. */
+    if (!copy_string(j, "device_authorization_endpoint", endpoint, sizeof(endpoint), 1)) {
+        message("Google discovery: missing or invalid device_authorization_endpoint.");
         goto done;
     }
+    if (strcmp(endpoint, DEVICE_URL)) {
+        message("Google discovery: unexpected device_authorization_endpoint (refused).");
+        goto done;
+    }
+    SDL_LockMutex(lock); state.discovery_details[0] = 0; SDL_UnlockMutex(lock);
     release(j);
     j = post(endpoint, "scope", SCOPE, NULL, &status);
     double interval = seconds(j, "interval"), lifetime = seconds(j, "expires_in");

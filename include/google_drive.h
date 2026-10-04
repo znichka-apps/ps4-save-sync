@@ -6,6 +6,7 @@ typedef struct {
     int busy;
     int cancellable;
     char message[192];
+    char discovery_details[384];
     char verification_url[256];
     char user_code[64];
 } google_drive_status;

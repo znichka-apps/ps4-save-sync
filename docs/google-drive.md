@@ -57,6 +57,16 @@ The Google module uses fresh libcurl handles with peer and hostname verification
 required, TLS 1.2 minimum, HTTPS-only protocols, no redirects or verbose logging,
 and a packaged Mozilla CA bundle. It never calls Apollo's insecure HTTP helper.
 Certificate failure, missing CA file, or a wrong console clock fails closed.
+Unauthenticated discovery failures have a dedicated screen diagnostic: failed
+libcurl option or transport error number and `curl_easy_strerror` text, non-200
+HTTP status, malformed/non-object JSON, or missing/unexpected device endpoint.
+The screen also reports whether the packaged CA file exists/is readable and
+libcurl's version/TLS backend. Discovery uses a `CURL_ERROR_SIZE` error buffer
+kept alive through `curl_easy_cleanup`. Only allowlisted error reasons and a
+strictly formatted mbedTLS code reach the UI; raw error text, URLs/proxy details,
+headers, request bodies, and response bodies are withheld. Successful discovery
+clears these details before device authorization; authenticated requests never
+populate them. Diagnostics wrap within the existing Google screen.
 Responses are bounded and parsed using unmodified cJSON 1.7.19. Token-bearing
 application buffers are wiped before freeing; secrets/responses never enter
 debug logs. Network requests have 10-second connection and 30-second total
@@ -91,6 +101,11 @@ on every mocked request. Store tests use a host SDK shim and mocked mounts but
 real file operations, including per-user isolation, fsync/rename failures
 preserving previous credentials, mount/unmount failures, malformed credential
 files, and deletion. These are **not PS4 ABI, TLS-backend, or runtime tests**.
+Discovery tests also cover failed setopt/status lookup, error-buffer lifetime
+through cleanup, sanitized TLS/proxy details, CA presence/readability, HTTP/JSON
+failure distinctions, endpoint validation, and no diagnostics on authenticated
+failures. The actual installed-console discovery error must be observed after
+deploying this diagnostic build; no cause or runtime fix is claimed by host tests.
 
 ## Remaining PS4 verification
 

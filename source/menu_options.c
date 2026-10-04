@@ -17,9 +17,12 @@ static void google_text(const char *text, int y)
     while (*text) {
         size_t n = strlen(text);
         if (n > 60) n = 60;
+        const char *newline = memchr(text, '\n', n);
+        if (newline) n = (size_t)(newline - text);
         memcpy(line, text, n); line[n] = 0;
         DrawString(180, y, line);
         y += 35; text += n;
+        if (*text == '\n') text++;
     }
 }
 void google_drive_ui_start(int action)
@@ -47,6 +50,7 @@ int google_drive_ui_frame(void)
     SetFontColor(APP_FONT_COLOR | 0xFF, 0);
     /* Wrap sanitized text; reserve generous width for Google's returned values. */
     google_text(status.message, 250);
+    if (status.discovery_details[0]) google_text(status.discovery_details, 440);
     if (status.verification_url[0]) {
         DrawString(180, 440, "Verification URL:");
         google_text(status.verification_url, 480);
