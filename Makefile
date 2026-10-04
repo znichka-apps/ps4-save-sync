@@ -72,8 +72,10 @@ include/google_build_config.h:
 $(CONTENT_ID).pkg: pkg.gp4
 	$(TOOLCHAIN)/bin/$(CDIR)/PkgTool.Core pkg_build $< .
 
-pkg.gp4: eboot.bin sce_sys/about/right.sprx sce_sys/param.sfo sce_sys/icon0.png sce_sys/icon0_4k.png sce_sys/save_data.png $(LIBMODULES) $(ASSETS)
-	$(TOOLCHAIN)/bin/$(CDIR)/create-gp4 -out $@ --content-id=$(CONTENT_ID) --files "$^"
+pkg.gp4: eboot.bin sce_sys/about/right.sprx sce_sys/param.sfo sce_sys/icon0.png sce_sys/icon0_4k.png sce_sys/save_data.png $(LIBMODULES) $(ASSETS) Makefile tools/ensure_gp4_dirs.py
+	$(TOOLCHAIN)/bin/$(CDIR)/create-gp4 -out $@.tmp --content-id=$(CONTENT_ID) --files "$(filter-out Makefile tools/ensure_gp4_dirs.py,$^)"
+	python3 tools/ensure_gp4_dirs.py $@.tmp
+	mv $@.tmp $@
 
 sce_sys/param.sfo: Makefile
 	$(TOOLCHAIN)/bin/$(CDIR)/PkgTool.Core sfo_new $@

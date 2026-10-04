@@ -39,6 +39,9 @@ jobs:
         sudo apt-get install -y libcurl4-openssl-dev libsdl2-dev
         sh tools/test_google_host.sh
 
+    - name: Test GP4 directory repair
+      run: python3 tools/test_ensure_gp4_dirs.py
+
     - name: Cache OpenOrbis Toolchain
       id: cache-oosdk
       uses: actions/cache@v4

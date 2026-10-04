@@ -118,3 +118,24 @@ exclude `client_secret*.json`, credentials/token JSON, local environment files,
 headers. Build outputs and host-test artifacts are ignored. Only synthetic
 credentials appear in committed tests; the smoke test keeps real tokens in
 memory and emits only sanitized results.
+
+## GP4 packaging
+
+`create-gp4` output is completed by `tools/ensure_gp4_dirs.py` before it is
+published as `pkg.gp4`. Every parent directory in a file's `targ_path` receives a
+nested `<dir targ_name="...">` declaration under `<rootdir>`, including
+`assets/google`. Existing directories, metadata, namespace declarations, comments,
+and file entries are preserved. Makefile/helper dependencies trigger regeneration
+without being included in the packaged file list. Temporary GP4 output is ignored
+and only replaces the final manifest after the repair succeeds.
+
+[LibOrbisPkg's filesystem builder](https://github.com/maxton/LibOrbisPkg/blob/master/LibOrbisPkg/PFS/PfsProperties.cs)
+loads directory declarations separately and throws in `FindDir` when a file's
+parent is missing. The CA file remains `assets/google/cacert.pem`, matching the
+installed path in `google_drive.c`; TLS verification remains required.
+
+Run `python3 tools/test_ensure_gp4_dirs.py` for representative nested paths,
+missing/empty rootdir, metadata/file preservation, invalid-path failure, and
+idempotence. These tests also run in Actions. No failing generated GP4 was
+available locally; the helper addresses the directory invariant behind the
+reported exception. GitHub Actions must verify the actual PKG build.

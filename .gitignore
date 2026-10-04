@@ -70,6 +70,7 @@ Mkfile.old
 dkms.conf
 /**/*.pkg
 /**/*.gp4
+/*.gp4.tmp*
 /**/sce_sys/
 /**/build/
 /**/Debug/
