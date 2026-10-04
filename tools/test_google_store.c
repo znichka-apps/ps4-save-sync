@@ -69,6 +69,9 @@ int main(void)
     assert(before == unmounts);
     fail_unmount = 1;
     assert(!google_store(42, GOOGLE_STORE_READ, token, sizeof(token)) && !token[0]); fail_unmount = 0;
+    assert(google_store_mount_blocked()); before=unmounts;
+    assert(!google_store(43,GOOGLE_STORE_READ,token,sizeof(token)) && !token[0] && before==unmounts);
+    credential_mount_blocked=0; /* Simulate a fresh process after the required restart. */
     FILE *fp = mapped_open("/mnt/sandbox/PSSY00001_000/u42/refresh_token", "wb");
     assert(fp); assert(fwrite("bad\0data", 1, 8, fp) == 8); fclose(fp);
     assert(!google_store(42, GOOGLE_STORE_READ, token, sizeof(token)) && !token[0]);

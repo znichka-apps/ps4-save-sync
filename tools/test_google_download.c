@@ -116,6 +116,12 @@ int main(void) {
         if (!mode) { assert(result==GOOGLE_UPLOAD_SUCCESS); assert(chunks>1); assert(!access(job.backup.archive,F_OK)); assert(google_backup_cleanup(&job.backup)); }
         else { assert(result==(mode==2?GOOGLE_UPLOAD_CANCELLED:GOOGLE_UPLOAD_FAILED)); assert(!job.backup.temp_dir[0]); }
     }
+    mode=0; stop=0; requests=chunks=0;
+    assert(google_download_recheck(&remote,&io) && requests==1 && !chunks);
+    saved=cJSON_Duplicate(metadata,1); change("gameName","Changed game");
+    assert(!google_download_recheck(&remote,&io)); cJSON_Delete(metadata); metadata=saved;
+    mode=10; assert(!google_download_recheck(&remote,&io));
+    mode=0; stop=1; assert(!google_download_recheck(&remote,&io)); stop=0;
     for (mode=10;mode<=14;mode++) {
         if (mode==12) continue;
         google_remote_backup job=remote; stop=0; requests=chunks=0;

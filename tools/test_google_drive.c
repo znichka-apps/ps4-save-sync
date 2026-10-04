@@ -220,6 +220,11 @@ int google_backup_stage(google_backup *b, int (*cancel)(void*), void *data)
     if (stage_allowed==2) b->mount_blocked=1;
     return 0; /* Test failures before any credential mount or network request. */
 }
+int google_restore_local(google_backup *b, int (*cancel)(void*), int (*finish)(void*), void *data)
+{
+    (void)b; (void)cancel; (void)finish; (void)data;
+    assert(0 && "Unexpected platform restore in transport test"); return GOOGLE_UPLOAD_FAILED;
+}
 #undef curl_easy_setopt
 #undef curl_easy_getinfo
 #define curl_easy_init mock_init
@@ -259,6 +264,7 @@ int google_store(uint32_t user, int operation, char *token, size_t cap)
     if (operation == GOOGLE_STORE_CLEAR) { stored[0] = 0; clears++; }
     return 1;
 }
+int google_store_mount_blocked(void) { return 0; }
 static void reset(int action)
 {
     memset(&state, 0, sizeof(state));
@@ -457,6 +463,16 @@ int main(void)
     char byte;
     assert(stream_read(&byte,1,1,&stream)==CURL_READFUNC_ABORT);
 
+    memset(&state,0,sizeof(state)); memset(&backup,0,sizeof(backup));
+    memset(&selected_backup,0,sizeof(selected_backup)); selected_ready=1; selected_backup.backup.user=42;
+    assert(!google_drive_start(GOOGLE_CHECK,42) && !google_drive_start(GOOGLE_BROWSE,42));
+    assert(!google_drive_start(GOOGLE_DISCONNECT,42) && !google_drive_start(GOOGLE_RESTORE,43));
+    assert(!google_drive_upload_start("Game","CUSA12345","SAVE",42));
+    assert(!google_drive_download_start(0,42) && !google_drive_discard_download(43));
+    state.busy=1; assert(!google_drive_start(GOOGLE_RESTORE,42) && !google_drive_discard_download(42));
+    state.busy=0; state.mount_blocked=1; assert(!google_drive_start(GOOGLE_RESTORE,42));
+    state.mount_blocked=0; assert(google_drive_discard_download(42) && !selected_ready && !state.restore_ready);
+    assert(!google_drive_start(GOOGLE_RESTORE,42));
     SDL_DestroyMutex(lock); lock = NULL;
     curl_global_cleanup();
     puts("Google auth host tests passed (mock HTTP/save-data; no real tokens).");

@@ -38,3 +38,19 @@ cc -std=gnu11 -Wall -Wextra -Werror -Wno-deprecated-declarations -fsanitize=addr
   -DGOOGLE_BACKUP_CACHE='"build/host/cache/"' -Iinclude tools/test_google_download.c \
   source/google_download.c source/google_backup.c source/cJSON.c -lzip -lcurl -lmbedcrypto -o build/host/test_google_download
 build/host/test_google_download
+
+cc -std=gnu11 -Wall -Wextra -Werror -Wno-deprecated-declarations -fsanitize=address,undefined -g \
+  -DGOOGLE_BACKUP_CACHE='"build/host/cache/"' -Itools/restore_host_include -Iinclude \
+  tools/test_google_restore.c source/google_restore.c source/save_target.c \
+  source/google_download.c source/google_backup.c source/cJSON.c -lzip -lcurl -lmbedcrypto -lsqlite3 \
+  -Wl,--wrap=write -o build/host/test_google_restore
+build/host/test_google_restore
+
+cc -std=gnu11 -Wall -Wextra -Werror -fsanitize=address,undefined -g \
+  -Itools/restore_host_include -Iinclude tools/test_save_create.c -o build/host/test_save_create
+build/host/test_save_create
+
+cc -std=gnu11 -Wall -Wextra -Werror -fsanitize=address,undefined -g \
+  -Itools/restore_host_include -Iinclude tools/test_google_restore_ps4.c -lmbedcrypto \
+  -o build/host/test_google_restore_ps4
+build/host/test_google_restore_ps4

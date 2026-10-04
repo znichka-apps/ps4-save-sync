@@ -36,7 +36,7 @@ jobs:
     - name: Test Google authentication on host
       run: |
         sudo apt-get update -qq
-        sudo apt-get install -y libcurl4-openssl-dev libsdl2-dev libmbedtls-dev libzip-dev
+        sudo apt-get install -y libcurl4-openssl-dev libsdl2-dev libmbedtls-dev libzip-dev libsqlite3-dev
         sh tools/test_google_host.sh
 
     - name: Test GP4 directory repair

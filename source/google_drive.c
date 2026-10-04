@@ -15,6 +15,7 @@
 #include "google_drive.h"
 #include "google_store.h"
 #include "google_ca.h"
+#include "google_restore.h"
 
 #define SCOPE "https://www.googleapis.com/auth/drive.file"
 #define DISCOVERY_URL "https://accounts.google.com/.well-known/openid-configuration"
@@ -36,6 +37,7 @@ static google_backup_page browser_page;
 static char browser_folder[129], browser_token[512];
 static uint32_t browser_user;
 static google_remote_backup selected_backup;
+static int selected_ready;
 typedef struct { FILE *file; uint64_t count, limit; } download_stream;
 static size_t download_write(void *buffer, size_t size, size_t count, void *data)
 {
@@ -582,6 +584,7 @@ static void upload_request(void *data, const google_upload_request *q, google_up
     }
     r->json = request_extended(q->url,NULL,auth->access,&status,q,r);
 }
+static int restore_finish(void *unused) { (void)unused; return begin_commit(); }
 static int worker(void *unused)
 {
     (void)unused;
@@ -621,6 +624,27 @@ static int worker(void *unused)
         if (!refresh_access(refresh, access)) goto done;
     }
     if (SDL_AtomicGet(&cancelled)) goto done;
+    if (current_action == GOOGLE_RESTORE) {
+        upload_auth auth = {refresh,access};
+        google_upload_io io = {&auth,upload_request,upload_refresh,upload_cancelled,upload_progress,upload_wait};
+        message("Rechecking selected backup metadata and archive...");
+        if (!google_download_recheck(&selected_backup,&io)) {
+            message("Backup metadata changed or could not be rechecked. Restore refused; no target written."); goto done;
+        }
+        int result=google_restore_local(&selected_backup.backup,upload_cancelled,restore_finish,NULL);
+        if (result==GOOGLE_UPLOAD_SUCCESS) {
+            selected_ready=0;
+            message(google_backup_cleanup(&selected_backup.backup)?
+                "Restore complete for this PS4 user. Save unmounted successfully.":
+                "Restore complete; save unmounted. Temporary ZIP cleanup failed.");
+        } else {
+            message(result==GOOGLE_UPLOAD_CANCELLED?"Restore cancelled; NOT successful.":"Restore failed; NOT successful. Downloaded ZIP retained.");
+            SDL_LockMutex(lock);
+            snprintf(state.preparation_details,sizeof(state.preparation_details),"%s",selected_backup.backup.diagnostic);
+            SDL_UnlockMutex(lock);
+        }
+        goto done;
+    }
     if (current_action == GOOGLE_BROWSE || current_action == GOOGLE_NEXT || current_action == GOOGLE_DOWNLOAD) {
         upload_auth auth = {refresh,access};
         google_upload_io io = {&auth,upload_request,upload_refresh,upload_cancelled,upload_progress,upload_wait};
@@ -632,6 +656,9 @@ static int worker(void *unused)
                 result = GOOGLE_UPLOAD_CANCELLED;
                 if (!google_backup_cleanup(&selected_backup.backup))
                     snprintf(selected_backup.backup.diagnostic,sizeof(selected_backup.backup.diagnostic),"Temporary download cleanup failed.");
+            }
+            if (result == GOOGLE_UPLOAD_SUCCESS) {
+                selected_ready=1; selected_backup.backup.user=current_user;
             }
             char summary[192];
             snprintf(summary,sizeof(summary),"%s [%.9s] %.63s %.20s: %s",
@@ -709,12 +736,16 @@ done:
             SDL_UnlockMutex(lock);
         }
     } else if (SDL_AtomicGet(&cancelled)) {
-        if (current_action != GOOGLE_DOWNLOAD) message("Google operation cancelled.");
-        else if (!download_handled) message("Download cancelled before transfer; no temporary backup ready.");
+        if (current_action != GOOGLE_DOWNLOAD && current_action != GOOGLE_RESTORE) message("Google operation cancelled.");
+        else if (current_action==GOOGLE_DOWNLOAD && !download_handled) message("Download cancelled before transfer; no temporary backup ready.");
+        else if (current_action==GOOGLE_RESTORE && !selected_backup.backup.diagnostic[0]) message("Restore cancelled before writing. Download retained.");
     }
+    if (google_store_mount_blocked()) message("Credential save unmount failed. Restart the app before further operations.");
     SDL_LockMutex(lock);
     state.busy = 0;
-    state.mount_blocked = backup.mount_blocked;
+    state.mount_blocked = backup.mount_blocked || selected_backup.backup.mount_blocked || google_store_mount_blocked();
+    state.restore_ready = selected_ready;
+    state.restore_backup = selected_backup.backup;
     state.user_code[0] = 0;
     state.verification_url[0] = 0;
     SDL_UnlockMutex(lock);
@@ -723,12 +754,14 @@ done:
 
 int google_drive_start(int action, uint32_t user)
 {
-    if (action < GOOGLE_CONNECT || action > GOOGLE_DOWNLOAD) return 0;
+    if (action < GOOGLE_CONNECT || action > GOOGLE_RESTORE) return 0;
     if (!lock) lock = SDL_CreateMutex();
     if (!lock) return 0;
     google_drive_status snapshot;
     google_drive_snapshot(&snapshot);
     if (snapshot.busy || snapshot.mount_blocked) return 0;
+    if (selected_ready && action!=GOOGLE_RESTORE) return 0;
+    if (action==GOOGLE_RESTORE && (!selected_ready || selected_backup.backup.user!=user)) return 0;
     if (thread) { SDL_WaitThread(thread, NULL); thread = NULL; }
     if (action == GOOGLE_NEXT) {
         if (browser_user != user || !browser_page.next[0]) return 0;
@@ -738,6 +771,7 @@ int google_drive_start(int action, uint32_t user)
         if (!google_backup_cleanup(&selected_backup.backup)) return 0;
     }
     SDL_AtomicSet(&cancelled, 0);
+    if (action==GOOGLE_RESTORE) selected_backup.backup.diagnostic[0]=0;
     current_action = action; current_user = user;
     SDL_LockMutex(lock);
     memset(&state, 0, sizeof(state));
@@ -747,7 +781,8 @@ int google_drive_start(int action, uint32_t user)
     SDL_UnlockMutex(lock);
     thread = SDL_CreateThread(worker, "google_drive", NULL);
     if (!thread) {
-        SDL_LockMutex(lock); state.busy = 0; SDL_UnlockMutex(lock);
+        SDL_LockMutex(lock); state.busy = 0; state.restore_ready=selected_ready;
+        state.restore_backup=selected_backup.backup; SDL_UnlockMutex(lock);
         message("Could not start Google connection worker."); return 0;
     }
     return 1;
@@ -755,7 +790,7 @@ int google_drive_start(int action, uint32_t user)
 int google_drive_download_start(unsigned index, uint32_t user)
 {
     google_drive_status s; google_drive_snapshot(&s);
-    if (s.busy || !s.browsing || browser_user!=user || index>=browser_page.count) return 0;
+    if (s.busy || s.mount_blocked || selected_ready || !s.browsing || browser_user!=user || index>=browser_page.count) return 0;
     if (!google_backup_cleanup(&selected_backup.backup)) return 0;
     selected_backup=browser_page.entries[index];
     return google_drive_start(GOOGLE_DOWNLOAD,user);
@@ -763,7 +798,7 @@ int google_drive_download_start(unsigned index, uint32_t user)
 int google_drive_upload_start(const char *game, const char *title, const char *directory, uint32_t user)
 {
     google_drive_status status; google_drive_snapshot(&status);
-    if (status.busy || status.mount_blocked || !game || !title || !directory ||
+    if (status.busy || status.mount_blocked || selected_ready || !game || !title || !directory ||
         strlen(game) >= sizeof(backup.game) || strlen(title) != 9 ||
         !*directory || strlen(directory) >= sizeof(backup.directory) ||
         !strcmp(directory,".") || !strcmp(directory,"..")) return 0;
@@ -777,6 +812,15 @@ void google_drive_snapshot(google_drive_status *out)
 {
     if (!lock) { memset(out, 0, sizeof(*out)); return; }
     SDL_LockMutex(lock); *out = state; SDL_UnlockMutex(lock);
+}
+int google_drive_discard_download(uint32_t user)
+{
+    google_drive_status s; google_drive_snapshot(&s);
+    if (s.busy || s.mount_blocked || !selected_ready || selected_backup.backup.user!=user) return 0;
+    if (!google_backup_cleanup(&selected_backup.backup)) { message("Temporary ZIP cleanup failed; download retained."); return 0; }
+    selected_ready=0;
+    SDL_LockMutex(lock); state.restore_ready=0; memset(&state.restore_backup,0,sizeof(state.restore_backup)); SDL_UnlockMutex(lock);
+    message("Downloaded backup discarded. No restore reported successful."); return 1;
 }
 void google_drive_cancel(void)
 {

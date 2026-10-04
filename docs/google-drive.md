@@ -1,8 +1,9 @@
-# Google Drive connection, backup browsing and downloads
+# Google Drive connection, backup browsing, downloads and restore
 
 The app connects Google Drive, uploads one selected PS4 HDD save, and browses
-and downloads marked backups into private temporary storage. Restoration, bulk
-uploads, and automatic sync are not implemented.
+and downloads marked backups into private temporary storage. A verified selected
+backup can now be restored into an empty save slot for the current local PS4
+user, with explicit confirmation. Bulk uploads and automatic sync are not implemented.
 Package identity remains `PSSY00001` /
 `IV0000-PSSY00001_00-PS4SAVESYNC00000`, separate from Apollo. Existing upstream
 credits and licenses remain in place.
@@ -11,8 +12,10 @@ Console testing reported by the owner confirms Google connection, Drive
 `files.list`, refresh after a full app restart, local disconnect, and reconnect.
 The owner also confirmed two separate ZIP uploads of the same save, verified
 the archive contents, and verified the original game save. Those are reported
-console upload results; browsing/download PS4 build and runtime verification
-remain pending.
+console upload results. The owner reports browsing and downloaded-backup
+validation on PS4 as well. The restore milestone has host verification only;
+its PS4 build/runtime and cross-console restore are still unverified. A second
+console is not currently available. No successful cross-console restore is claimed.
 
 ## Build registration
 
@@ -173,7 +176,7 @@ stops local work; it does not revoke OAuth or delete remote files.
 ## Host checks
 
 On Linux with a C compiler, libcurl, mbedTLS, libzip, and SDL2 development headers
-(`libcurl4-openssl-dev libmbedtls-dev libzip-dev libsdl2-dev` on Ubuntu):
+(`libcurl4-openssl-dev libmbedtls-dev libzip-dev libsdl2-dev libsqlite3-dev` on Ubuntu):
 
 ```sh
 sh tools/test_google_host.sh
@@ -216,6 +219,18 @@ transfers, cancellation, HTTP/network/short-read failures, checksum mismatch,
 and unsafe paths, symlinks, special files, malformed ZIPs and CRC validation.
 Production curl download callbacks are checked for secure TLS options, progress,
 oversized responses, multiplication overflow, cancellation, and disk-write failure.
+Restore tests use actual ZIP/SFO fixture bytes, disk writes and SQLite queries:
+absent targets, existing keys, orphan volumes, DB-only rows, inaccessible DBs,
+wrong users, SFO title/directory mismatch and malformed offsets, archive changes,
+unsafe paths and links, copy errors, cancellation before/during/after writes,
+ownership and metadata-update failures, unmount failure, and success-boundary
+cancellation. Separate tests exercise the real exclusive creation code with
+mocked kernel/crypto/image functions, racing key/volume creation and write,
+sync/close failures. The PS4 adapter's ownership fields and PSID HMAC are checked
+after mocked SFO patch/read errors and incorrectly patched values. Transport
+tests verify operation exclusion and per-user restore/discard gates. Platform
+mounts, image creation, actual SFO patching on PFS, and game loadability still
+require a real PS4.
 
 ## Remaining PS4 verification
 
@@ -285,11 +300,13 @@ archives are not marked ready.
 
 Completion identifies title ID, save directory and backup time, and explicitly
 reports whether validation passed. A successful ZIP stays in private temporary
-storage until another browse/download starts or normal app shutdown. Failures
+storage until restore succeeds, the user explicitly discards/cancels the ready
+download, or normal app shutdown. A ready download blocks another Google
+operation until it is restored or discarded. Download failures
 and cancellation remove only the job's fixed ZIP and exclusive directory;
 cleanup errors are shown. Abrupt termination can leave an isolated cache entry
-for the existing cache-clean action after restart. No game save is mounted,
-modified, overwritten, extracted or restored by browsing/downloading.
+for the existing cache-clean action after restart. Browsing/downloading alone
+does not mount, modify, overwrite or extract a game save.
 MD5/CRC consistency checks detect transfer/archive corruption; they do not
 provide authenticity against an account owner editing both content and metadata.
 
@@ -311,8 +328,100 @@ provide authenticity against an account owner editing both content and metadata.
 6. Repeat after full app restart and under another PS4 user. Verify token refresh,
    per-user credentials, account isolation, disconnect/reconnect, no overlapping
    game/GoogleAuth mounts, and no credentials or response bodies in debug logs.
-7. Verify successful-cache cleanup on the next browse and normal shutdown, then
+7. Verify ready-cache cleanup on explicit discard and normal shutdown, then
    exercise existing save export/upload/settings behavior for regressions.
+
+## Restore into an empty local slot
+
+After **validation passed**, the panel shows **Confirm: Restore (empty slot
+only)**. Confirmation identifies the game, title ID, save directory, backup UTC
+and current PS4 user ID. Declining confirmation or cancelling the ready panel
+discards only the private ZIP. It never deletes a game save. Confirmation does
+not authorize an overwrite.
+
+The worker refreshes this user's credentials and re-fetches the selected file's
+metadata, requiring the same ID, versions, format, game, title, directory, UTC,
+size and checksum. It then repeats the local size/MD5 and full ZIP validation
+immediately before creation. The private archive must be a regular file in the
+job's generated directory. The embedded `param.sfo` receives bounded structural
+validation before Apollo parses it: unique bounded keys and values, terminated
+strings, matching `TITLE_ID`/`SAVEDATA_DIRECTORY` and embedded PARAMS title,
+required ownership/detail fields, and supported save allocation blocks (96 to
+524288, 32 KiB per block). Restore directory names must fit the PS4 32-byte field.
+Unsupported SFOs fail without creating a target.
+
+Absence is checked against the current user's save key, PFS volume and savedata
+database. Existing saves, orphan files, stale DB rows or unknown lookup results
+are refused. The mount helper rechecks absence and creates the key and volume
+with exclusive opens, so a racing target is refused rather than truncated.
+The existing Apollo image creation, DB registration and mount pipeline is used.
+Validated ZIP entries are streamed directly into that mount, stripping exactly
+the save-directory root. Directory descriptors and no-follow opens prevent
+symlink traversal; sizes, reads, writes, syncs and closes are checked. Apollo's
+ownership patch is applied with the current local account, user and PSID, then
+those fields/HMAC are verified. Zero local user/account IDs are refused rather
+than leaving foreign ownership. Save detail database writes and unmount results
+must also succeed. The generic Apollo HTTP downloader/extractor is not used.
+
+Rendering and controller input remain on the main thread. The existing exclusive
+worker serializes save, credential and network phases. Google credentials are
+read/refreshed before the target save mount; no credential mount or HTTP transfer
+runs during extraction/ownership patching. Token handling and verified TLS remain
+unchanged. Cancellation is checked through validation and copy, and again after
+unmount through the atomic success boundary. An accepted cancellation cannot
+report restore success, even when the last write already completed.
+
+On success the save is unmounted and the download is removed; a private-cache
+cleanup error is reported separately. On failure or in-flight cancellation the
+download remains available for inspection/retry or explicit discard. Newly
+created partial targets are deliberately retained: this milestone has no
+automatic target rollback/deletion, because uncertain creation/database/mount
+state cannot establish safe deletion. A retry refuses such an existing target.
+Inspect it manually and remove only a confirmed disposable target under the
+same user, using normal save management after a clean restart. Unmount failure
+blocks further save/credential/network operations until app restart; a failed
+GoogleAuth credential unmount has the same restart requirement. Abrupt
+termination also requires manual inspection and does not imply success.
+
+## Safe disposable-save restore test on PS4 (pending)
+
+1. Build/install with OpenOrbis and the existing dependencies. Keep the game
+   closed throughout download/restore. Use one current PS4 user and a genuinely
+   disposable save; record its title ID and exact directory. Make an independent
+   USB backup and verify that backup before deleting anything. Do not use your
+   only copy of an important save.
+2. Upload the disposable save, then browse and download that exact backup.
+   Verify the confirmation's game, title ID, directory, timestamp and user ID.
+   Restore while the original slot still exists: expect **Save already exists**,
+   no overwrite and no success. Confirm the original still loads unchanged.
+3. Close the game and app. Through normal PS4 save management, delete only the
+   independently backed-up disposable save for that same user. Restart Save Sync
+   and confirm that exact slot is absent. Do not edit/remove database rows or
+   other users' files manually to force an empty-slot result.
+4. Download the same backup again, choose **Restore**, inspect all confirmation
+   fields and accept. Expect **Restore complete for this PS4 user. Save unmounted
+   successfully.** Verify the title/save entry and its details, mount read-only
+   with development tooling if available, and check the restored SFO account,
+   PARAMS user ID and PSID HMAC belong to the current user. Check copied file
+   contents and private ZIP cleanup, then close Save Sync and launch the game.
+   Confirm the disposable progress loads; restart the console and repeat loading.
+5. Download it again and attempt another restore. Expect refusal with no change
+   to the restored save. Separately decline confirmation/cancel the ready panel:
+   expect ZIP cleanup and no target changes. Repeat under another local user to
+   check that credentials/confirmation/target checks remain scoped to that user.
+6. With another empty disposable slot, cancel during hash/ZIP validation and copy,
+   and exercise storage, ownership-patch and unmount failures using controlled
+   development tooling. Expect no successful result on failure/cancellation.
+   Pre-creation cancellation leaves no target; post-creation cancellation/failure
+   may retain a partial slot. Restart after unmount failure, inspect the exact
+   current-user disposable slot, and delete it only after confirming it is the
+   newly created test target. Never delete an existing save to clear an error.
+7. Verify PS4 support for exclusive kernel opens, descriptor-relative no-follow
+   extraction, PFS file sync/close, SFO compatibility, image allocation, DB details,
+   ownership patching and unmount. Check UI responsiveness, rejection of overlapping
+   operations and continued token isolation/TLS verification. Repeat export/upload
+   regressions. When the second console becomes available, repeat this same empty
+   disposable-slot procedure there before claiming cross-console success.
 
 ## Credential exclusion
 

@@ -55,6 +55,16 @@ int google_drive_ui_frame(void)
     google_drive_status status;
     if (!google_panel) return 0;
     google_drive_snapshot(&status);
+    if (!status.busy && !status.mount_blocked && status.restore_ready &&
+        orbisPadGetButtonPressed(ORBIS_PAD_BUTTON_CROSS)) {
+        const google_backup *b=&status.restore_backup;
+        if (show_dialog(DIALOG_TYPE_YESNO,"Restore into an EMPTY save slot?\nGame: %s\nTitle ID: %s\nSave directory: %s\nBackup UTC: %s\nCurrent PS4 user: %08x\nExisting saves will be refused.",
+            b->game,b->title,b->directory,b->utc,apollo_config.user_id)) {
+            if (!google_drive_start(GOOGLE_RESTORE,apollo_config.user_id)) show_message("Unable to start restore for this PS4 user.");
+        } else google_drive_discard_download(apollo_config.user_id);
+        /* Do not consume the same confirm/cancel again below this dialog. */
+        return 1;
+    }
     if (!status.busy && status.browsing) {
         if (google_selection >= status.backups.count) google_selection = 0;
         if (orbisPadGetButtonPressed(ORBIS_PAD_BUTTON_UP) && google_selection) google_selection--;
@@ -68,7 +78,9 @@ int google_drive_ui_frame(void)
         if (status.mount_blocked) { /* Require restart after an unconfirmed unmount. */ }
         else if (status.busy && status.cancellable) google_drive_cancel();
         else if (status.busy) { /* Let atomic credential updates finish. */ }
-        else google_panel = 0;
+        else if (status.restore_ready) {
+            if (google_drive_discard_download(apollo_config.user_id)) google_panel=0;
+        } else google_panel = 0;
     }
     DrawHeader(cat_opt_png_index, 0, "Google Drive", NULL, APP_FONT_TITLE_COLOR | 0xFF, 0xffffffff, 0);
     SetFontAlign(FONT_ALIGN_LEFT);
@@ -82,6 +94,13 @@ int google_drive_ui_frame(void)
             (unsigned long long)status.completed_bytes, (unsigned long long)status.total_bytes,
             (unsigned)(100.0 * status.completed_bytes / status.total_bytes));
     if (status.discovery_details[0]) google_text(status.discovery_details, 440);
+    if (!status.busy && status.restore_ready) {
+        const google_backup *b=&status.restore_backup;
+        DrawFormatString(180,660,"Game: %.*s",(int)google_text_prefix(b->game,60),b->game);
+        DrawFormatString(180,700,"Title: %s  Save: %s",b->title,b->directory);
+        DrawFormatString(180,740,"Backup UTC: %s  Current user: %08x",b->utc,apollo_config.user_id);
+        DrawString(180,820,"Confirm: Restore (empty slot only)  Cancel: discard ZIP");
+    }
     if (!status.busy && status.browsing) {
         for (unsigned i=0;i<status.backups.count;i++) {
             const google_backup *b=&status.backups.entries[i].backup;
@@ -107,7 +126,7 @@ int google_drive_ui_frame(void)
     if (status.mount_blocked)
         DrawString(180, 900, "Restart the app to release the failed mount.");
     else if (status.busy && !status.cancellable)
-        DrawString(180, 900, "Finishing local credential update...");
+        DrawString(180, 900, "Finishing operation...");
     else
         DrawFormatString(180, 900, "%s: %s", cancel_button,
             status.busy ? "cancel operation" : "return");

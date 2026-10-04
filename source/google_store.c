@@ -5,6 +5,8 @@
 #include <time.h>
 #include <orbis/SaveData.h>
 #include "google_store.h"
+static int credential_mount_blocked;
+int google_store_mount_blocked(void) { return credential_mount_blocked; }
 
 /* No title override: mount this application's own save, for the captured user. */
 int google_store(uint32_t user, int operation, char *token, size_t capacity)
@@ -15,6 +17,10 @@ int google_store(uint32_t user, int operation, char *token, size_t capacity)
     char path[256], temp[272];
     int ok = 0;
     FILE *fp = NULL;
+    if (credential_mount_blocked) {
+        if (token && capacity && operation==GOOGLE_STORE_READ) token[0]=0;
+        return 0;
+    }
     if (!token || capacity < 2 || operation < GOOGLE_STORE_READ || operation > GOOGLE_STORE_CLEAR) return 0;
     memcpy(name.data, "GoogleAuth", sizeof("GoogleAuth"));
     mount.userId = user;
@@ -52,7 +58,7 @@ int google_store(uint32_t user, int operation, char *token, size_t capacity)
         }
     }
     if (fp && fclose(fp) != 0) ok = 0;
-    if (sceSaveDataUmount((void*)&result.mountPathName) < 0) ok = 0;
+    if (sceSaveDataUmount((void*)&result.mountPathName) < 0) { ok = 0; credential_mount_blocked=1; }
     if (!ok && operation == GOOGLE_STORE_READ) token[0] = 0;
     return ok;
 }

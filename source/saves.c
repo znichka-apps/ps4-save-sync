@@ -5,6 +5,7 @@
 #include <time.h>
 #include <dirent.h>
 #include <errno.h>
+#include <sys/stat.h>
 #include <orbis/SaveData.h>
 #include <sqlite3.h>
 #include <mini18n.h>
@@ -74,7 +75,7 @@ int orbis_SaveUmount(const char* mountPath)
 	return (umountErrorCode == SUCCESS);
 }
 
-int orbis_SaveMount(const save_entry_t *save, uint32_t mount_mode, char* mount_path)
+static int save_mount(const save_entry_t *save, uint32_t mount_mode, char* mount_path, uint32_t empty_user, int empty)
 {
 	if (save->title_id && save->dir_name && !strcmp(save->title_id, "PSSY00001") &&
 		!strcmp(save->dir_name, "GoogleAuth")) return 0;
@@ -83,6 +84,10 @@ int orbis_SaveMount(const save_entry_t *save, uint32_t mount_mode, char* mount_p
 	char volumePath[256];
 
 	snprintf(mountDir, sizeof(mountDir), APOLLO_SANDBOX_PATH, save->dir_name);
+	if (empty) {
+		struct stat st;
+		if (!lstat(mountDir,&st) || errno!=ENOENT) return 0;
+	}
 	if (mkdirs(mountDir) < 0)
 	{
 		int saved_errno = errno;
@@ -107,14 +112,15 @@ int orbis_SaveMount(const save_entry_t *save, uint32_t mount_mode, char* mount_p
 		snprintf(volumePath, sizeof(volumePath), SAVES_PATH_HDD "%s/sdimg_%s", apollo_config.user_id, save->title_id, save->dir_name);
 	}
 
-	if ((mount_mode & ORBIS_SAVE_DATA_MOUNT_MODE_CREATE2) && (file_exists(keyPath) != SUCCESS))
+	if (empty && orbis_SaveTargetAbsent(save,empty_user)!=1) return 0;
+	if (empty || ((mount_mode & ORBIS_SAVE_DATA_MOUNT_MODE_CREATE2) && (file_exists(keyPath) != SUCCESS)))
 	{
 		sqlite3 *db;
 		char *query, dbpath[256];
 
 		LOG("Creating save '%s'...", keyPath);
-		mkdirs(volumePath);
-		if (createSave(volumePath, keyPath, save->blocks) < 0)
+		if (mkdirs(volumePath) < 0) return 0;
+		if ((empty ? createSaveEmpty(volumePath, keyPath, save->blocks) : createSave(volumePath, keyPath, save->blocks)) < 0)
 		{
 			LOG("ERROR: can't create '%s'", keyPath);
 			return 0;
@@ -136,9 +142,10 @@ int orbis_SaveMount(const save_entry_t *save, uint32_t mount_mode, char* mount_p
 			return 0;
 		}
 
-		save_sqlite_db(db, dbpath);
+		int db_saved = save_sqlite_db(db, dbpath);
 		sqlite3_free(query);
-		sqlite3_close(db);
+		if (sqlite3_close(db)!=SQLITE_OK) db_saved=0;
+		if (!db_saved) return 0;
 	}
 
 	int mountErrorCode = mountSave(volumePath, keyPath, mountDir);
@@ -155,6 +162,15 @@ int orbis_SaveMount(const save_entry_t *save, uint32_t mount_mode, char* mount_p
 	strlcpy(mount_path, save->dir_name, ORBIS_SAVE_DATA_DIRNAME_DATA_MAXSIZE);
 
 	return 1;
+}
+
+int orbis_SaveMount(const save_entry_t *save, uint32_t mode, char* mount_path)
+{
+    return save_mount(save,mode,mount_path,0,0);
+}
+int orbis_SaveMountEmpty(const save_entry_t *save, uint32_t user, char* mount_path)
+{
+    return save_mount(save,ORBIS_SAVE_DATA_MOUNT_MODE_RDWR|ORBIS_SAVE_DATA_MOUNT_MODE_CREATE2, mount_path,user,1);
 }
 
 int orbis_UpdateSaveParams(const save_entry_t* save, const char* title, const char* subtitle, const char* details, uint32_t userParam)
@@ -180,11 +196,11 @@ int orbis_UpdateSaveParams(const save_entry_t* save, const char* title, const ch
 		return 0;
 	}
 
-	save_sqlite_db(db, dbpath);
+	int db_saved = save_sqlite_db(db, dbpath);
 	sqlite3_free(query);
-	sqlite3_close(db);
+	if (sqlite3_close(db)!=SQLITE_OK) db_saved=0;
 
-	return 1;
+	return db_saved;
 }
 
 /*

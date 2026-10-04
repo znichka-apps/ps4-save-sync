@@ -228,25 +228,31 @@ static int cache_directory(void) {
     }
     return 1;
 }
+int google_download_recheck(const google_remote_backup *remote, const google_upload_io *io) {
+    const google_backup *b=&remote->backup;
+    if (!id(remote->id) || io->cancelled(io->data)) return 0;
+    char url[256];
+    snprintf(url,sizeof(url),FILES "/%s?fields=id,mimeType,size,md5Checksum,description,appProperties",remote->id);
+    google_upload_request q={.method="GET",.url=url}; google_upload_response r={0}; google_remote_backup fresh;
+    int ok=call(io,&q,&r) && google_download_metadata(r.json,&fresh) &&
+        !strcmp(fresh.id,remote->id) && !strcmp(fresh.backup.game,b->game) &&
+        !strcmp(fresh.backup.title,b->title) && !strcmp(fresh.backup.directory,b->directory) &&
+        !strcmp(fresh.backup.utc,b->utc) && !strcmp(fresh.backup.md5,b->md5) && fresh.backup.size==b->size;
+    cJSON_Delete(r.json); return ok;
+}
 int google_download_run(google_remote_backup *remote, const google_upload_io *io) {
     google_backup *b=&remote->backup; google_upload_response r={0}; int result=GOOGLE_UPLOAD_FAILED;
     char url[256]; FILE *fp=NULL;
     if (!id(remote->id) || io->cancelled(io->data)) goto done;
     /* Re-read metadata at selection time, rejecting changed files. */
-    snprintf(url,sizeof(url),FILES "/%s?fields=id,mimeType,size,md5Checksum,description,appProperties",remote->id);
-    google_upload_request q={.method="GET",.url=url}; google_remote_backup fresh;
-    if (!call(io,&q,&r) || !google_download_metadata(r.json,&fresh) ||
-        strcmp(fresh.id,remote->id) || strcmp(fresh.backup.game,b->game) ||
-        strcmp(fresh.backup.title,b->title) || strcmp(fresh.backup.directory,b->directory) ||
-        strcmp(fresh.backup.utc,b->utc) || strcmp(fresh.backup.md5,b->md5) || fresh.backup.size!=b->size) goto done;
-    cJSON_Delete(r.json); memset(&r,0,sizeof(r));
+    if (!google_download_recheck(remote,io)) goto done;
     if (!cache_directory()) goto done;
     snprintf(b->temp_dir,sizeof(b->temp_dir),GOOGLE_BACKUP_CACHE "drive-XXXXXX");
     if (!mkdtemp(b->temp_dir)) { b->temp_dir[0]=0; goto done; }
     snprintf(b->archive,sizeof(b->archive),"%s/backup.zip",b->temp_dir);
     fp=fopen(b->archive,"wb+"); if (!fp) goto done;
     snprintf(url,sizeof(url),FILES "/%s?alt=media",remote->id);
-    q=(google_upload_request){.method="GET",.url=url,.download=fp,.total=b->size};
+    google_upload_request q={.method="GET",.url=url,.download=fp,.total=b->size};
     if (!call(io,&q,&r) || r.downloaded!=b->size || fflush(fp) || ferror(fp)) goto done;
     if (fclose(fp)) { fp=NULL; goto done; } fp=NULL;
     google_backup hash=*b;

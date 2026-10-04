@@ -16,8 +16,11 @@ typedef struct {
     char user_code[64];
     google_backup_page backups;
     int browsing;
+    int restore_ready;
+    google_backup restore_backup;
 } google_drive_status;
-enum { GOOGLE_CONNECT, GOOGLE_CHECK, GOOGLE_DISCONNECT, GOOGLE_UPLOAD, GOOGLE_BROWSE, GOOGLE_NEXT, GOOGLE_DOWNLOAD };
+enum { GOOGLE_CONNECT, GOOGLE_CHECK, GOOGLE_DISCONNECT, GOOGLE_UPLOAD, GOOGLE_BROWSE, GOOGLE_NEXT, GOOGLE_DOWNLOAD, GOOGLE_RESTORE };
+int google_drive_discard_download(uint32_t user);
 int google_drive_download_start(unsigned index, uint32_t user);
 int google_drive_upload_start(const char *game, const char *title, const char *directory, uint32_t user);
 void google_drive_ui_upload(const char *game, const char *title, const char *directory, uint32_t user);

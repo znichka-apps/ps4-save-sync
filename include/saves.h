@@ -325,6 +325,8 @@ int regMgr_SetAccountId(int userNumber, uint64_t* psnAccountId);
 int get_save_details(const save_entry_t *save, char** details);
 int orbis_SaveUmount(const char* mountPath);
 int orbis_SaveMount(const save_entry_t *save, uint32_t mode, char* mountPath);
+int orbis_SaveTargetAbsent(const save_entry_t *save, uint32_t user);
+int orbis_SaveMountEmpty(const save_entry_t *save, uint32_t user, char* mountPath);
 int orbis_SaveDelete(const save_entry_t *save);
 int orbis_UpdateSaveParams(const save_entry_t* save, const char* title, const char* subtitle, const char* details, uint32_t up);
 

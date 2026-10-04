@@ -126,7 +126,7 @@ int decryptSealedKeyAtPath(const char *keyPath, uint8_t decryptedSealedKey[DEC_S
     return 0;
 }
 
-int createSave(const char *volumePath, const char *volumeKeyPath, int blocks) {
+static int create_save(const char *volumePath, const char *volumeKeyPath, int blocks, int empty) {
     uint8_t sealedKey[ENC_SEALEDKEY_LEN];
     uint8_t decryptedSealedKey[DEC_SEALEDKEY_LEN];
     uint64_t volumeSize;
@@ -145,8 +145,8 @@ int createSave(const char *volumePath, const char *volumeKeyPath, int blocks) {
         return -2;
     }
 
-    fd = sceKernelOpen(volumeKeyPath, O_CREAT | O_TRUNC | O_WRONLY, 0777);
-    if (fd == -1) {
+    fd = sceKernelOpen(volumeKeyPath, O_CREAT | O_WRONLY | (empty ? O_EXCL : O_TRUNC), 0777);
+    if (fd < 0) {
         return -3;
     }
 
@@ -155,20 +155,22 @@ int createSave(const char *volumePath, const char *volumeKeyPath, int blocks) {
         sceKernelClose(fd);
         return -4;
     }
-    sceKernelClose(fd);
+    int key_ok = sceKernelFsync(fd) == 0;
+    if (sceKernelClose(fd) != 0) key_ok = 0;
+    if (!key_ok) return -4;
 
-    fd = sceKernelOpen(volumePath, O_CREAT | O_TRUNC | O_WRONLY, 0777);
-    if (fd == -1) {
+    fd = sceKernelOpen(volumePath, O_CREAT | O_WRONLY | (empty ? O_EXCL : O_TRUNC), 0777);
+    if (fd < 0) {
         return -5;
     }
 
-    volumeSize = blocks << 15;
+    volumeSize = (uint64_t)blocks << 15;
 
     if (sceFsUfsAllocateSaveData(fd, volumeSize, 0 << 7, 0) < 0) {
         sceKernelClose(fd);
         return -6;
     }
-    sceKernelClose(fd);
+    if (sceKernelClose(fd) != 0) return -6;
 
     if (sceFsInitCreatePfsSaveDataOpt(&opt) < 0) {
         return -7;
@@ -180,10 +182,19 @@ int createSave(const char *volumePath, const char *volumeKeyPath, int blocks) {
 
     // finalize
     fd = sceKernelOpen(volumePath, O_RDONLY, 0);
-    sceKernelFsync(fd);
-    sceKernelClose(fd);
+    if (fd < 0) return -9;
+    int image_ok = sceKernelFsync(fd) == 0;
+    if (sceKernelClose(fd) != 0) image_ok = 0;
+    if (!image_ok) return -9;
     
     return 0;
+}
+
+int createSave(const char *volumePath, const char *volumeKeyPath, int blocks) {
+    return create_save(volumePath,volumeKeyPath,blocks,0);
+}
+int createSaveEmpty(const char *volumePath, const char *volumeKeyPath, int blocks) {
+    return create_save(volumePath,volumeKeyPath,blocks,1);
 }
 
 int mountSave(const char *volumePath, const char *volumeKeyPath, const char *mountPath) {
