@@ -11,6 +11,15 @@
 #include "google_drive.h"
 
 static int google_panel;
+static unsigned google_selection;
+static size_t google_text_prefix(const char *text, size_t limit)
+{
+    size_t n = strlen(text);
+    if (n <= limit) return n;
+    n = limit;
+    while (n && ((unsigned char)text[n] & 0xc0) == 0x80) n--;
+    return n;
+}
 void google_drive_ui_upload(const char *game, const char *title, const char *directory, uint32_t user)
 {
     if (!google_drive_upload_start(game,title,directory,user)) {
@@ -22,8 +31,7 @@ static void google_text(const char *text, int y)
 {
     char line[61];
     while (*text) {
-        size_t n = strlen(text);
-        if (n > 60) n = 60;
+        size_t n = google_text_prefix(text,60);
         const char *newline = memchr(text, '\n', n);
         if (newline) n = (size_t)(newline - text);
         memcpy(line, text, n); line[n] = 0;
@@ -34,6 +42,7 @@ static void google_text(const char *text, int y)
 }
 void google_drive_ui_start(int action)
 {
+    google_selection = 0;
     if (!google_drive_start(action, apollo_config.user_id)) {
         show_message("Unable to start Google Drive operation.");
         return;
@@ -46,6 +55,15 @@ int google_drive_ui_frame(void)
     google_drive_status status;
     if (!google_panel) return 0;
     google_drive_snapshot(&status);
+    if (!status.busy && status.browsing) {
+        if (google_selection >= status.backups.count) google_selection = 0;
+        if (orbisPadGetButtonPressed(ORBIS_PAD_BUTTON_UP) && google_selection) google_selection--;
+        if (orbisPadGetButtonPressed(ORBIS_PAD_BUTTON_DOWN) && google_selection + 1 < status.backups.count) google_selection++;
+        if (orbisPadGetButtonPressed(ORBIS_PAD_BUTTON_R1) && status.backups.next[0]) google_drive_ui_start(GOOGLE_NEXT);
+        if (orbisPadGetButtonPressed(ORBIS_PAD_BUTTON_CROSS) && status.backups.count &&
+            !google_drive_download_start(google_selection,apollo_config.user_id))
+            show_message("Unable to start Google Drive download.");
+    }
     if (orbisPadGetButtonPressed(ORBIS_PAD_BUTTON_CIRCLE)) {
         if (status.mount_blocked) { /* Require restart after an unconfirmed unmount. */ }
         else if (status.busy && status.cancellable) google_drive_cancel();
@@ -60,10 +78,25 @@ int google_drive_ui_frame(void)
     google_text(status.message, 250);
     if (status.preparation_details[0]) google_text(status.preparation_details, 440);
     if (status.total_bytes)
-        DrawFormatString(180, 370, "Upload: %llu / %llu bytes (%u%%)",
+        DrawFormatString(180, 370, "Transfer: %llu / %llu bytes (%u%%)",
             (unsigned long long)status.completed_bytes, (unsigned long long)status.total_bytes,
             (unsigned)(100.0 * status.completed_bytes / status.total_bytes));
     if (status.discovery_details[0]) google_text(status.discovery_details, 440);
+    if (!status.busy && status.browsing) {
+        for (unsigned i=0;i<status.backups.count;i++) {
+            const google_backup *b=&status.backups.entries[i].backup;
+            /* All remote values are arguments, never format strings. */
+            DrawFormatString(180,350+i*32,"%s [%s] %s  %.*s",i==google_selection?">":" ",b->title,b->utc,
+                (int)google_text_prefix(b->game,28),b->game);
+        }
+        if (status.backups.count) {
+            const google_backup *b=&status.backups.entries[google_selection].backup;
+            DrawFormatString(180,690,"Game: %.*s",(int)google_text_prefix(b->game,60),b->game);
+            DrawFormatString(180,725,"Save: %s",b->directory);
+            DrawFormatString(180,755,"Backup: %s  Size: %llu bytes",b->utc,(unsigned long long)b->size);
+        }
+        DrawString(180,820,"Up/Down: select  Confirm: download  R1: next page");
+    }
     if (status.verification_url[0]) {
         DrawString(180, 440, "Verification URL:");
         google_text(status.verification_url, 480);

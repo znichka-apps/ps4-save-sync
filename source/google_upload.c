@@ -70,7 +70,7 @@ static int call(const google_upload_io *io, google_upload_request *q, google_upl
     }
     return r->transport == CURLE_OK && !r->invalid_headers;
 }
-static int folder(const google_upload_io *io, char *id, int allow_create)
+int google_upload_folder(const google_upload_io *io, char *id, int allow_create)
 {
     const char *query = "trashed = false and mimeType = 'application/vnd.google-apps.folder' and 'root' in parents and appProperties has { key='ps4SaveSync' and value='" MARKER "' }";
     char *escaped = curl_easy_escape(NULL,query,0);
@@ -114,7 +114,7 @@ static int folder(const google_upload_io *io, char *id, int allow_create)
     ok = call(io,&q,&r,1) && r.status == 200 && identifier(string(r.json,"id"));
     dispose(&r);
     /* Resolve a concurrent creator before choosing this upload's parent. */
-    return ok && folder(io,id,0);
+    return ok && google_upload_folder(io,id,0);
 }
 static char *metadata(const google_backup *b, const char *folder_id, const char *file_id)
 {
@@ -175,7 +175,7 @@ int google_upload_run(const google_backup *b, const google_upload_io *io)
     char folder_id[129], file_id[129], session[2048], range[96];
     google_upload_response r = {0}; FILE *fp = NULL; char *body = NULL;
     int result = GOOGLE_UPLOAD_FAILED, final_sent = 0;
-    if (!b->size || b->size > INT64_MAX || !folder(io,folder_id,1)) goto done;
+    if (!b->size || b->size > INT64_MAX || !google_upload_folder(io,folder_id,1)) goto done;
     google_upload_request q = {.method="GET",.url=FILES "/generateIds?count=1&space=drive&type=files"};
     if (!call(io,&q,&r,1) || r.status != 200) goto done;
     cJSON *ids = cJSON_GetObjectItemCaseSensitive(r.json,"ids"), *first = cJSON_GetArrayItem(ids,0);

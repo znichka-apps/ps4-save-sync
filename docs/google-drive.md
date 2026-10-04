@@ -1,15 +1,18 @@
-# Google Drive connection and single-save backup
+# Google Drive connection, backup browsing and downloads
 
-This milestone connects Google Drive and uploads one selected PS4 HDD save.
-Downloads, restoration, bulk uploads, and automatic sync are not implemented.
+The app connects Google Drive, uploads one selected PS4 HDD save, and browses
+and downloads marked backups into private temporary storage. Restoration, bulk
+uploads, and automatic sync are not implemented.
 Package identity remains `PSSY00001` /
 `IV0000-PSSY00001_00-PS4SAVESYNC00000`, separate from Apollo. Existing upstream
 credits and licenses remain in place.
 
 Console testing reported by the owner confirms Google connection, Drive
 `files.list`, refresh after a full app restart, local disconnect, and reconnect.
-Those results cover authentication. The new upload's PS4 build and runtime
-verification remain pending.
+The owner also confirmed two separate ZIP uploads of the same save, verified
+the archive contents, and verified the original game save. Those are reported
+console upload results; browsing/download PS4 build and runtime verification
+remain pending.
 
 ## Build registration
 
@@ -40,7 +43,7 @@ confidential; these values will necessarily be present in the installed binary.
 
 ## Console behavior
 
-Settings contains **Connect Google Drive**, **Connection Status**, and
+Settings contains **Google Drive Backups**, **Connect Google Drive**, **Connection Status**, and
 **Disconnect Google Drive**. Connect displays Google's returned verification URL
 and case-sensitive code while a worker polls at the returned interval. A
 `slow_down` response adds five seconds to subsequent intervals. The console's
@@ -206,8 +209,13 @@ escaping, folder creation/reuse/pagination, chunk alignment and partial-offset
 recovery, 401 refresh failure, lost final-response recovery without duplicate
 creation, invalid session/header rejection, and size/checksum verification. The
 production curl read/header callbacks are exercised with mocked transport, real
-disk reads, and the same verified CA setup. PS4 save mounts and live Drive uploads
-remain outside the host checks.
+disk reads, and the same verified CA setup. PS4 save mounts and live Drive transfers remain outside the host checks.
+Download host tests cover listing and escaped page tokens, invalid/cyclic tokens,
+metadata/version/date/size/checksum rejection, refresh failures, streamed disk
+transfers, cancellation, HTTP/network/short-read failures, checksum mismatch,
+and unsafe paths, symlinks, special files, malformed ZIPs and CRC validation.
+Production curl download callbacks are checked for secure TLS options, progress,
+oversized responses, multiplication overflow, cancellation, and disk-write failure.
 
 ## Remaining PS4 verification
 
@@ -227,35 +235,84 @@ install it, and verify:
 
 No PS4 build, installation, or runtime success is asserted by the host checks.
 
-## Test one small save on PS4 (pending)
+## Google Drive Backups
 
-1. Build and package the local changes with OpenOrbis, the ignored OAuth build
-   header, and the normal verified libcurl/mbedTLS/libzip dependencies. Install
-   the separate PSSY00001 package. No successful upload build/runtime is asserted.
-2. Use the same local PS4 user whose Google connection was confirmed. In Settings,
-   run Connection Status and confirm success. Return to HDD saves and select one
-   small, non-trophy PS4 save. Record its game/title ID/save directory; retain an
-   existing local export for comparison if available.
-3. Choose **Back up to Google Drive** under File Backup. Confirm the displayed
-   game/save, then wait for preparation and upload. Verify controller input and
-   the byte/percentage display stay responsive.
-4. Expect **Backup complete. Drive confirmed ZIP size and checksum.** In that
-   Google account's My Drive, open **PS4 Save Sync** and confirm one new ZIP.
-   Download it using the Drive website on a computer (the app has no download
-   action), inspect `SAVE_DIRECTORY/...` and `sce_sys`, and compare its size/MD5
-   and files with the original export. Confirm metadata in the file description.
-5. Launch the game and verify the original save still loads. Repeat one backup:
-   expect the same marked folder and a second file, with the first untouched.
-   Repeat from the other PS4 using the same OAuth client/account to verify reuse.
-6. On another attempt, cancel during preparation or an early chunk; confirm a
-   cancellation result, released mounts, and removal of that owned cache ZIP.
-   Interrupt networking during upload, restore it within the bounded retries,
-   and verify status-probe recovery produces one file. If the final response is
-   lost or cancellation happens during final upload, an uncertain result is
-   acceptable: inspect Drive before manually retrying.
-7. Confirm source save/settings exports still work, credential export guards and
-   authentication reconnect/refresh still pass, no GoogleAuth/game mounts
-   overlap, and debug logs contain no tokens, session URLs, or response bodies.
+Open **Google Drive Backups** in Settings using the connected PS4 user. The
+worker refreshes that user's existing credentials and searches the same private
+marker and canonical oldest root folder used by uploads; it never creates a
+folder or writes to Drive. A missing folder or failed search is reported. The
+`drive.file` scope is unchanged; backups made with another OAuth client or an
+unconnected account may be inaccessible.
+
+The browser requests ten files per page, ordered by Drive creation time newest
+first. It shows game/title ID, and the selected save directory, backup UTC and
+byte size. Up/Down selects a row, Confirm downloads it, R1 fetches the next page,
+and Cancel returns. Empty pages can still have a next page. Reopen the entry to
+restart from page one. Malformed backups are excluded and counted on that page;
+invalid page tokens and a token repeating the current page fail closed. The
+folder search retains its existing bounded pagination. File names are never
+used for parsing, paths or formatting. Descriptions are bounded untrusted JSON,
+with duplicate keys, embedded NULs, control characters, unknown versions,
+invalid UTF-8 or Unicode direction/control characters, invalid dates/title
+IDs/directory components, overflowing sizes, and conflicting
+Drive/backup size or MD5 rejected. Only the existing metadata version 1 and
+`apollo-decrypted-zip` format version 1 are supported.
+
+Selection triggers a fresh metadata lookup and requires it to match the listed
+backup. The media GET streams directly to a generated
+`cache/drive-XXXXXX/backup.zip`, never to a remote-supplied filename. Every write
+is capped by the expected size, and the curl response byte count, disk byte count
+and sequential MD5 must match both Drive metadata and the backup description.
+Metadata requests retain the existing timeouts; media downloads use a ten-second
+connection timeout and abort after thirty seconds without useful transfer rather
+than limiting the entire download to thirty seconds. Controller rendering stays
+on the main thread; cancellation interrupts network, hash and archive reads.
+An HTTP 401 permits one rotation-safe token refresh and a clean restart of that
+request. Other failures require a manual retry; no range resume is implemented.
+
+Validation opens ZIPs read-only and checks raw central/local filenames plus
+libzip consistency. Embedded NULs, absolute/traversal/backslash/drive paths,
+symlinks and special files, duplicate names or file/directory conflicts,
+encryption, and entries outside the exact save-directory root are rejected.
+The archive must include a nonempty `SAVE_DIRECTORY/sce_sys/param.sfo` and regular
+save files. Each entry is streamed through libzip to verify sizes and CRCs,
+without extraction. The v1 reader supports single-disk ZIPs without ZIP64 or
+trailing data, at most 4096 entries, 4 GiB per uncompressed file and 16 GiB total
+expanded bytes. Compression is limited to stored/deflated entries, central
+directory metadata to 8 MiB, extra fields to 4096 bytes and per-entry comments
+to 1024 bytes. These conservative limits bound validation work; unsupported
+archives are not marked ready.
+
+Completion identifies title ID, save directory and backup time, and explicitly
+reports whether validation passed. A successful ZIP stays in private temporary
+storage until another browse/download starts or normal app shutdown. Failures
+and cancellation remove only the job's fixed ZIP and exclusive directory;
+cleanup errors are shown. Abrupt termination can leave an isolated cache entry
+for the existing cache-clean action after restart. No game save is mounted,
+modified, overwritten, extracted or restored by browsing/downloading.
+MD5/CRC consistency checks detect transfer/archive corruption; they do not
+provide authenticity against an account owner editing both content and metadata.
+
+## Verify browsing and download on PS4 (pending)
+
+1. Build/install this milestone with OpenOrbis and the existing verified TLS and
+   libzip dependencies. Host results do not assert PS4 ABI or installation success.
+2. Under the connected user, open **Google Drive Backups**. Confirm the two
+   reported uploads are separate selectable rows with the correct game, title
+   ID, directory, timestamps and sizes. Check a renamed folder/file still works.
+3. Download each backup and expect **validation passed. Temporary ZIP ready.**
+   Compare the private ZIP's size/MD5 and contents with the previously verified
+   backups using development tooling. Confirm the original game save still loads.
+4. With more than ten backups, test R1 pagination (including a page with invalid
+   entries), selection, restarting from page one, and empty/missing-folder results.
+5. Cancel during transfer, hashing and ZIP verification; disconnect networking,
+   fill the cache storage, and verify responsive UI plus partial-file cleanup.
+   Confirm a corrupt ZIP or mismatched metadata never reports ready.
+6. Repeat after full app restart and under another PS4 user. Verify token refresh,
+   per-user credentials, account isolation, disconnect/reconnect, no overlapping
+   game/GoogleAuth mounts, and no credentials or response bodies in debug logs.
+7. Verify successful-cache cleanup on the next browse and normal shutdown, then
+   exercise existing save export/upload/settings behavior for regressions.
 
 ## Credential exclusion
 

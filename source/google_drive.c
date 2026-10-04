@@ -32,6 +32,22 @@ static uint32_t current_user;
 static int current_action;
 static int ca_request_failed;
 static google_backup backup;
+static google_backup_page browser_page;
+static char browser_folder[129], browser_token[512];
+static uint32_t browser_user;
+static google_remote_backup selected_backup;
+typedef struct { FILE *file; uint64_t count, limit; } download_stream;
+static size_t download_write(void *buffer, size_t size, size_t count, void *data)
+{
+    download_stream *s = data;
+    if (SDL_AtomicGet(&cancelled) || (size && count > SIZE_MAX / size)) return 0;
+    size_t n = size * count;
+    if (n > s->limit - s->count) return 0;
+    size_t written = fwrite(buffer,1,n,s->file);
+    s->count += written;
+    SDL_LockMutex(lock); state.completed_bytes = s->count; state.total_bytes = s->limit; SDL_UnlockMutex(lock);
+    return written;
+}
 
 typedef struct {
     const google_upload_request *request;
@@ -229,13 +245,14 @@ static cJSON *request_extended(const char *url, const char *form, const char *ac
     CURLcode result = CURLE_OK;
     google_ca_context ca_context;
     upload_stream stream = {upload, upload ? upload->length : 0};
+    download_stream sink = {upload ? upload->download : NULL, 0, upload ? upload->total : 0};
     google_ca_init(&ca_context);
     ca_request_failed = 0;
     const char *failure = NULL, *failed_option = NULL;
     cJSON *json = NULL;
     *status = 0;
     if (!curl || !b.data) { result = CURLE_OUT_OF_MEMORY; failure = "initialization"; goto done; }
-    headers = curl_slist_append(NULL, "Accept: application/json");
+    headers = curl_slist_append(NULL, sink.file ? "Accept: application/zip" : "Accept: application/json");
     if (!headers) { result = CURLE_OUT_OF_MEMORY; failure = "initialization"; goto done; }
     if (access) {
         snprintf(auth, sizeof(auth), "Authorization: Bearer %s", access);
@@ -291,10 +308,18 @@ static cJSON *request_extended(const char *url, const char *form, const char *ac
     OPT(CURLOPT_VERBOSE, 0L);
     OPT(CURLOPT_NOSIGNAL, 1L);
     OPT(CURLOPT_CONNECTTIMEOUT, 10L);
-    OPT(CURLOPT_TIMEOUT, 30L);
+    OPT(CURLOPT_TIMEOUT, sink.file ? 0L : 30L);
+    if (sink.file) {
+        OPT(CURLOPT_LOW_SPEED_LIMIT, 1L);
+        OPT(CURLOPT_LOW_SPEED_TIME, 30L);
+    }
     OPT(CURLOPT_HTTPHEADER, headers);
     OPT(CURLOPT_WRITEFUNCTION, receive);
     OPT(CURLOPT_WRITEDATA, &b);
+    if (sink.file) {
+        OPT(CURLOPT_WRITEFUNCTION, download_write);
+        OPT(CURLOPT_WRITEDATA, &sink);
+    }
     OPT(CURLOPT_NOPROGRESS, 0L);
     OPT(CURLOPT_XFERINFOFUNCTION, progress);
     OPT(CURLOPT_XFERINFODATA, upload ? &stream : NULL);
@@ -330,12 +355,17 @@ static cJSON *request_extended(const char *url, const char *form, const char *ac
     result = curl_easy_getinfo(curl, CURLINFO_RESPONSE_CODE, status);
     if (result != CURLE_OK) { failure = "HTTP status lookup"; goto done; }
     if (discovery && *status != 200) { failure = "HTTP"; goto done; }
-    json = cJSON_ParseWithOpts(b.data, NULL, 1);
-    if (!cJSON_IsObject(json)) { failure = "JSON"; release(json); json = NULL; }
+    if (!sink.file) {
+        const char *end = NULL;
+        if (!memchr(b.data,0,b.size) && !strstr(b.data,"\\u0000"))
+            json = cJSON_ParseWithOpts(b.data, &end, 1);
+        if (end != b.data + b.size) { release(json); json = NULL; }
+        if (!cJSON_IsObject(json)) { failure = "JSON"; release(json); json = NULL; }
+    }
 done:
     /* Keep callback/form/header storage alive until the easy handle is gone. */
     if (curl) curl_easy_cleanup(curl);
-    if (reply) { reply->transport = result; reply->status = *status; }
+    if (reply) { reply->transport = result; reply->status = *status; reply->downloaded = sink.count; }
     if (discovery || ca_request_failed) {
         /* Public CA state only, even for authenticated requests; never emit
            their curl error buffers, request data, or response bodies. */
@@ -556,6 +586,7 @@ static int worker(void *unused)
 {
     (void)unused;
     int upload_handled = 0;
+    int download_handled = 0;
     char *refresh = calloc(1, TOKEN_CAP), *access = calloc(1, TOKEN_CAP);
     long status = 0;
     cJSON *j = NULL;
@@ -590,6 +621,51 @@ static int worker(void *unused)
         if (!refresh_access(refresh, access)) goto done;
     }
     if (SDL_AtomicGet(&cancelled)) goto done;
+    if (current_action == GOOGLE_BROWSE || current_action == GOOGLE_NEXT || current_action == GOOGLE_DOWNLOAD) {
+        upload_auth auth = {refresh,access};
+        google_upload_io io = {&auth,upload_request,upload_refresh,upload_cancelled,upload_progress,upload_wait};
+        if (current_action == GOOGLE_DOWNLOAD) {
+            message("Downloading and validating backup...");
+            int result = google_download_run(&selected_backup,&io);
+            download_handled = 1;
+            if (result == GOOGLE_UPLOAD_SUCCESS && !begin_commit()) {
+                result = GOOGLE_UPLOAD_CANCELLED;
+                if (!google_backup_cleanup(&selected_backup.backup))
+                    snprintf(selected_backup.backup.diagnostic,sizeof(selected_backup.backup.diagnostic),"Temporary download cleanup failed.");
+            }
+            char summary[192];
+            snprintf(summary,sizeof(summary),"%s [%.9s] %.63s %.20s: %s",
+                result == GOOGLE_UPLOAD_SUCCESS ? "Downloaded" : "Download", selected_backup.backup.title,
+                selected_backup.backup.directory,
+                selected_backup.backup.utc,
+                result == GOOGLE_UPLOAD_SUCCESS ? "validation passed. Temporary ZIP ready." :
+                result == GOOGLE_UPLOAD_CANCELLED ? "cancelled; not ready." : "failed validation or transfer; not ready.");
+            message(summary);
+            if (selected_backup.backup.diagnostic[0]) {
+                SDL_LockMutex(lock);
+                snprintf(state.preparation_details,sizeof(state.preparation_details),"%s",selected_backup.backup.diagnostic);
+                SDL_UnlockMutex(lock);
+            }
+        } else {
+            message("Listing Google Drive backups...");
+            if (current_action == GOOGLE_BROWSE) {
+                memset(&browser_page,0,sizeof(browser_page)); browser_folder[0]=browser_token[0]=0;
+                browser_user=current_user;
+                if (!google_upload_folder(&io,browser_folder,0)) {
+                    message("No accessible marked backup folder, or folder search failed."); goto done;
+                }
+            }
+            google_backup_page page;
+            if (browser_user!=current_user || !google_download_list(&io,browser_folder,browser_token,&page)) {
+                message("Could not list backups. Retry Google Drive Backups."); goto done;
+            }
+            browser_page=page;
+            SDL_LockMutex(lock); state.backups=page; state.browsing=1; SDL_UnlockMutex(lock);
+            char summary[192]; snprintf(summary,sizeof(summary),"Google Drive Backups: %u valid; %u invalid metadata rejected.",page.count,page.rejected);
+            message(summary);
+        }
+        goto done;
+    }
     if (current_action == GOOGLE_UPLOAD) {
         message("Uploading save backup to Google Drive...");
         upload_auth auth = {refresh,access};
@@ -632,7 +708,10 @@ done:
             snprintf(state.message + n,sizeof(state.message)-n," Cache cleanup failed.");
             SDL_UnlockMutex(lock);
         }
-    } else if (SDL_AtomicGet(&cancelled)) message("Google operation cancelled.");
+    } else if (SDL_AtomicGet(&cancelled)) {
+        if (current_action != GOOGLE_DOWNLOAD) message("Google operation cancelled.");
+        else if (!download_handled) message("Download cancelled before transfer; no temporary backup ready.");
+    }
     SDL_LockMutex(lock);
     state.busy = 0;
     state.mount_blocked = backup.mount_blocked;
@@ -644,13 +723,20 @@ done:
 
 int google_drive_start(int action, uint32_t user)
 {
-    if (action < GOOGLE_CONNECT || action > GOOGLE_UPLOAD) return 0;
+    if (action < GOOGLE_CONNECT || action > GOOGLE_DOWNLOAD) return 0;
     if (!lock) lock = SDL_CreateMutex();
     if (!lock) return 0;
     google_drive_status snapshot;
     google_drive_snapshot(&snapshot);
     if (snapshot.busy || snapshot.mount_blocked) return 0;
     if (thread) { SDL_WaitThread(thread, NULL); thread = NULL; }
+    if (action == GOOGLE_NEXT) {
+        if (browser_user != user || !browser_page.next[0]) return 0;
+        strcpy(browser_token,browser_page.next);
+    }
+    if (action == GOOGLE_BROWSE || action == GOOGLE_DOWNLOAD) {
+        if (!google_backup_cleanup(&selected_backup.backup)) return 0;
+    }
     SDL_AtomicSet(&cancelled, 0);
     current_action = action; current_user = user;
     SDL_LockMutex(lock);
@@ -665,6 +751,14 @@ int google_drive_start(int action, uint32_t user)
         message("Could not start Google connection worker."); return 0;
     }
     return 1;
+}
+int google_drive_download_start(unsigned index, uint32_t user)
+{
+    google_drive_status s; google_drive_snapshot(&s);
+    if (s.busy || !s.browsing || browser_user!=user || index>=browser_page.count) return 0;
+    if (!google_backup_cleanup(&selected_backup.backup)) return 0;
+    selected_backup=browser_page.entries[index];
+    return google_drive_start(GOOGLE_DOWNLOAD,user);
 }
 int google_drive_upload_start(const char *game, const char *title, const char *directory, uint32_t user)
 {
@@ -695,5 +789,6 @@ void google_drive_shutdown(void)
 {
     google_drive_cancel();
     if (thread) { SDL_WaitThread(thread, NULL); thread = NULL; }
+    google_backup_cleanup(&selected_backup.backup);
     if (lock) { SDL_DestroyMutex(lock); lock = NULL; }
 }

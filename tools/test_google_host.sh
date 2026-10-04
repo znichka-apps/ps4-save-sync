@@ -5,7 +5,7 @@ mkdir -p build/host/include build/host/store
 # Tests never embed local OAuth registration values.
 printf '%s\n' '#define GDRIVE_CLIENT_ID "synthetic-client"' '#define GDRIVE_CLIENT_SECRET "synthetic-secret"' > build/host/include/google_build_config.h
 cc -std=gnu11 -Wall -Wextra -Werror -Wno-deprecated-declarations -fsanitize=address,undefined -g \
-  -Ibuild/host/include -Iinclude tools/test_google_drive.c source/google_upload.c source/google_backup.c source/cJSON.c -lcurl -lSDL2 -lmbedtls -lmbedx509 -lmbedcrypto -lm -o build/host/test_google_drive
+  -Ibuild/host/include -Iinclude tools/test_google_drive.c source/google_upload.c source/google_download.c source/google_backup.c source/cJSON.c -lzip -lcurl -lSDL2 -lmbedtls -lmbedx509 -lmbedcrypto -lm -o build/host/test_google_drive
 build/host/test_google_drive
 cc -std=gnu11 -Wall -Wextra -Werror -Wno-deprecated-declarations -fsanitize=address,undefined -g \
   -Iinclude tools/test_google_ca.c -lcurl -lmbedtls -lmbedx509 -lmbedcrypto -o build/host/test_google_ca
@@ -33,3 +33,8 @@ for platform in host ps4; do
     -o build/host/test_save_zip_$platform
   build/host/test_save_zip_$platform
 done
+
+cc -std=gnu11 -Wall -Wextra -Werror -Wno-deprecated-declarations -fsanitize=address,undefined -g \
+  -DGOOGLE_BACKUP_CACHE='"build/host/cache/"' -Iinclude tools/test_google_download.c \
+  source/google_download.c source/google_backup.c source/cJSON.c -lzip -lcurl -lmbedcrypto -o build/host/test_google_download
+build/host/test_google_download

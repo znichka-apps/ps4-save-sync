@@ -69,6 +69,8 @@ $(INTDIR)/exec_cmd.o: include/save_zip.h include/google_drive.h include/google_u
 $(INTDIR)/google_upload.o $(INTDIR)/google_backup.o $(INTDIR)/google_save.o: include/google_upload.h
 $(INTDIR)/google_save.o: include/save_zip.h include/saves.h
 $(INTDIR)/save_zip.o: include/save_zip.h
+$(INTDIR)/google_download.o $(INTDIR)/google_drive.o $(INTDIR)/menu_options.o $(INTDIR)/settings.o: include/google_download.h include/google_drive.h
+$(INTDIR)/google_download.o: include/google_upload.h
 
 include/google_build_config.h:
 	@echo "Missing Google OAuth configuration. Run python3 tools/configure_google.py before building." >&2

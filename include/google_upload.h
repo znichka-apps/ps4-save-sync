@@ -19,6 +19,7 @@ typedef struct {
 typedef struct {
     const char *method, *url, *json, *range;
     FILE *file;
+    FILE *download; /* GET sink, capped at total bytes. */
     uint64_t offset, length, total;
 } google_upload_request;
 typedef struct {
@@ -26,6 +27,7 @@ typedef struct {
     long status;
     char location[2048], range[96];
     int invalid_headers;
+    uint64_t downloaded;
     cJSON *json;
 } google_upload_response;
 typedef struct {
@@ -38,6 +40,7 @@ typedef struct {
 } google_upload_io;
 enum { GOOGLE_UPLOAD_FAILED, GOOGLE_UPLOAD_SUCCESS, GOOGLE_UPLOAD_CANCELLED, GOOGLE_UPLOAD_UNCERTAIN };
 int google_upload_session_url(const char *url);
+int google_upload_folder(const google_upload_io *io, char *id, int allow_create);
 int google_upload_run(const google_backup *backup, const google_upload_io *io);
 int google_backup_stage(google_backup *backup, int (*cancelled)(void*), void *data);
 int google_backup_hash(google_backup *backup, int (*cancelled)(void*), void *data);

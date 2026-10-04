@@ -426,6 +426,29 @@ int main(void)
     assert(upload_header((void*)duplicate,1,strlen(duplicate),&headers)==strlen(duplicate));
     upload_header((void*)duplicate,1,strlen(duplicate),&headers);
     assert(headers.invalid_headers);
+    /* Download callbacks use the same verified transport, with a bounded sink. */
+    reset(GOOGLE_CHECK);
+    response_headers=NULL; stream_test=0;
+    FILE *download=fopen("build/host/download-transport.bin","wb+"); assert(download);
+    google_upload_request get={.method="GET",.url="https://www.googleapis.com/drive/v3/files/synthetic?alt=media",
+        .download=download,.total=6};
+    memset(&response,0,sizeof(response)); add(200,"abcdef");
+    result=request_extended(get.url,NULL,"synthetic-access",&http,&get,&response);
+    assert(!result && http==200 && response.transport==CURLE_OK && response.downloaded==6);
+    assert(state.completed_bytes==6 && state.total_bytes==6);
+    assert(!fflush(download)); rewind(download); char bytes[7]={0};
+    assert(fread(bytes,1,6,download)==6 && !strcmp(bytes,"abcdef"));
+    reset(GOOGLE_CHECK); add(200,"toolong");
+    result=request_extended(get.url,NULL,"synthetic-access",&http,&get,&response);
+    assert(!result && response.transport==CURLE_WRITE_ERROR && !response.downloaded);
+    SDL_AtomicSet(&cancelled,1);
+    download_stream sink={download,0,6};
+    assert(!download_write(bytes,1,6,&sink));
+    SDL_AtomicSet(&cancelled,0);
+    assert(!download_write(bytes,SIZE_MAX,2,&sink));
+    fclose(download); download=fopen("build/host/download-transport.bin","rb"); assert(download);
+    sink=(download_stream){download,0,6}; assert(!download_write(bytes,1,6,&sink));
+    fclose(download); assert(!remove("build/host/download-transport.bin"));
     const char *status_line="HTTP/1.1 200 OK\r\n";
     upload_header((void*)status_line,1,strlen(status_line),&headers);
     assert(!headers.invalid_headers && !headers.location[0]);
