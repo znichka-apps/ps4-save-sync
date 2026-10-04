@@ -73,6 +73,8 @@ int orbis_SaveUmount(const char* mountPath)
 
 int orbis_SaveMount(const save_entry_t *save, uint32_t mount_mode, char* mount_path)
 {
+	if (save->title_id && save->dir_name && !strcmp(save->title_id, "PSSY00001") &&
+		!strcmp(save->dir_name, "GoogleAuth")) return 0;
 	char mountDir[256];
 	char keyPath[256];
 	char volumePath[256];
@@ -1519,6 +1521,10 @@ static void read_hdd_savegames(const char* userPath, list_t *list, sqlite3 *appd
 	while (sqlite3_step(res) == SQLITE_ROW)
 	{
 		const char* subtitle = (const char*) sqlite3_column_text(res, 5);
+		/* Private app credentials must never enter save export/backup lists. */
+		if (!strcmp((const char*) sqlite3_column_text(res, 0), "PSSY00001") &&
+			!strcmp((const char*) sqlite3_column_text(res, 1), "GoogleAuth"))
+			continue;
 		strncpy(name, (const char*) sqlite3_column_text(res, 2), ORBIS_SAVE_DATA_DETAIL_MAXSIZE);
 		get_appdb_title(appdb, (const char*) sqlite3_column_text(res, 0), name);
 		strcat(name, " - ");

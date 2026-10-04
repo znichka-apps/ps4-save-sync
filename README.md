@@ -238,3 +238,8 @@ the Free Software Foundation, either version 3 of the License, or
 [img_downloads]: https://img.shields.io/github/downloads/bucanero/apollo-ps4/total.svg?maxAge=3600
 [img_latest]: https://img.shields.io/github/release/bucanero/apollo-ps4.svg?maxAge=3600
 [img_license]: https://img.shields.io/github/license/bucanero/apollo-ps4.svg?maxAge=2592000
+
+## Google Drive connection development
+
+Local authentication milestone and console verification notes:
+[Google Drive connection](docs/google-drive.md). Drive save transfers are not implemented.

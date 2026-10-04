@@ -57,7 +57,17 @@ ifeq ($(UNAME_S),Darwin)
 		CDIR    := macos
 endif
 
-all: $(CONTENT_ID).pkg ## Build the package.
+all: google-config-check $(CONTENT_ID).pkg ## Build the package.
+
+.PHONY: google-config-check
+google-config-check:
+	@test -s include/google_build_config.h || (echo "Missing Google OAuth configuration. Run python3 tools/configure_google.py with external credentials or GDRIVE_CLIENT_ID/GDRIVE_CLIENT_SECRET." >&2; exit 1)
+
+$(INTDIR)/google_drive.o: include/google_build_config.h
+
+include/google_build_config.h:
+	@echo "Missing Google OAuth configuration. Run python3 tools/configure_google.py before building." >&2
+	@exit 1
 
 $(CONTENT_ID).pkg: pkg.gp4
 	$(TOOLCHAIN)/bin/$(CDIR)/PkgTool.Core pkg_build $< .

@@ -1790,6 +1790,10 @@ static void toggleBrowserHistory(int usr)
 
 void execCodeCommand(code_entry_t* code, const char* codecmd)
 {
+	/* Refuse private credentials even if an entry reaches us outside the save list. */
+	if (selected_entry->title_id && selected_entry->dir_name &&
+		!strcmp(selected_entry->title_id, "PSSY00001") &&
+		!strcmp(selected_entry->dir_name, "GoogleAuth")) return;
 	char *tmp = NULL;
 	char mount[ORBIS_SAVE_DATA_DIRNAME_DATA_MAXSIZE];
 

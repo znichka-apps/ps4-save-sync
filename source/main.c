@@ -19,6 +19,7 @@
 #include "sfo.h"
 #include "util.h"
 #include "common.h"
+#include "google_drive.h"
 #include "orbisPad.h"
 
 //Menus
@@ -735,6 +736,8 @@ s32 main(s32 argc, const char* argv[])
 	if (apollo_config.doAni)
 		drawEndLogo();
 
+    // Join Google worker before shutting down SDL or global libcurl.
+    google_drive_shutdown();
     // Cleanup resources
     SDL_DestroyRenderer(renderer);
     SDL_DestroyWindow(window);

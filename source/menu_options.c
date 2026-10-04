@@ -8,6 +8,59 @@
 #include "menu_gui.h"
 #include "libfont.h"
 #include "orbisPad.h"
+#include "google_drive.h"
+
+static int google_panel;
+static void google_text(const char *text, int y)
+{
+    char line[61];
+    while (*text) {
+        size_t n = strlen(text);
+        if (n > 60) n = 60;
+        memcpy(line, text, n); line[n] = 0;
+        DrawString(180, y, line);
+        y += 35; text += n;
+    }
+}
+void google_drive_ui_start(int action)
+{
+    if (!google_drive_start(action, apollo_config.user_id)) {
+        show_message("Unable to start Google Drive operation.");
+        return;
+    }
+    google_panel = 1;
+}
+
+int google_drive_ui_frame(void)
+{
+    google_drive_status status;
+    if (!google_panel) return 0;
+    google_drive_snapshot(&status);
+    if (orbisPadGetButtonPressed(ORBIS_PAD_BUTTON_CIRCLE)) {
+        if (status.busy && status.cancellable) google_drive_cancel();
+        else if (status.busy) { /* Let atomic credential updates finish. */ }
+        else google_panel = 0;
+    }
+    DrawHeader(cat_opt_png_index, 0, "Google Drive", NULL, APP_FONT_TITLE_COLOR | 0xFF, 0xffffffff, 0);
+    SetFontAlign(FONT_ALIGN_LEFT);
+    SetFontSize(28, 32);
+    SetFontColor(APP_FONT_COLOR | 0xFF, 0);
+    /* Wrap sanitized text; reserve generous width for Google's returned values. */
+    google_text(status.message, 250);
+    if (status.verification_url[0]) {
+        DrawString(180, 440, "Verification URL:");
+        google_text(status.verification_url, 480);
+        DrawString(180, 680, "User code (case sensitive):");
+        google_text(status.user_code, 720);
+    }
+    const char *cancel_button = orbisPadGetConf()->crossButtonOK ? "Circle" : "Cross";
+    if (status.busy && !status.cancellable)
+        DrawString(180, 900, "Finishing local credential update...");
+    else
+        DrawFormatString(180, 900, "%s: %s", cancel_button,
+            status.busy ? "cancel operation" : "return to Settings");
+    return 1;
+}
 
 static void _draw_OptionsMenu(u8 alpha)
 {

@@ -11,6 +11,7 @@
 #include "libfont.h"
 #include "ttf_render.h"
 #include "common.h"
+#include "google_drive.h"
 #include "mcio.h"
 #include "ps1card.h"
 
@@ -579,6 +580,7 @@ static void doAboutMenu(void)
 
 static void doOptionsMenu(void)
 {
+	if (google_drive_ui_frame()) return;
 	// Check the pads.
 	if(orbisPadGetButtonHold(ORBIS_PAD_BUTTON_UP))
 		move_selection_back(menu_options_maxopt, 1);

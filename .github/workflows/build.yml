@@ -27,6 +27,18 @@ jobs:
         echo "curl_path=oosdk_libraries/curl-7.64.1" >> $GITHUB_ENV
         echo "OO_PS4_TOOLCHAIN=${GITHUB_WORKSPACE}/OpenOrbis/PS4Toolchain" >> $GITHUB_ENV
 
+    - name: Generate Google OAuth build configuration
+      env:
+        GDRIVE_CLIENT_ID: ${{ secrets.GDRIVE_CLIENT_ID }}
+        GDRIVE_CLIENT_SECRET: ${{ secrets.GDRIVE_CLIENT_SECRET }}
+      run: python3 tools/configure_google.py
+
+    - name: Test Google authentication on host
+      run: |
+        sudo apt-get update -qq
+        sudo apt-get install -y libcurl4-openssl-dev libsdl2-dev
+        sh tools/test_google_host.sh
+
     - name: Cache OpenOrbis Toolchain
       id: cache-oosdk
       uses: actions/cache@v4
