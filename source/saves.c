@@ -4,6 +4,7 @@
 #include <unistd.h>
 #include <time.h>
 #include <dirent.h>
+#include <errno.h>
 #include <orbis/SaveData.h>
 #include <sqlite3.h>
 #include <mini18n.h>
@@ -60,6 +61,7 @@ int orbis_SaveUmount(const char* mountPath)
 
 	snprintf(mountDir, sizeof(mountDir), APOLLO_SANDBOX_PATH, mountPath);
 	int umountErrorCode = umountSave(mountDir, 0, 0);
+	int saved_errno = errno;
 	
 	if (umountErrorCode < 0)
 	{
@@ -68,6 +70,7 @@ int orbis_SaveUmount(const char* mountPath)
 	}
 
 	rmdir(mountDir);
+	errno = saved_errno;
 	return (umountErrorCode == SUCCESS);
 }
 
@@ -82,7 +85,9 @@ int orbis_SaveMount(const save_entry_t *save, uint32_t mount_mode, char* mount_p
 	snprintf(mountDir, sizeof(mountDir), APOLLO_SANDBOX_PATH, save->dir_name);
 	if (mkdirs(mountDir) < 0)
 	{
+		int saved_errno = errno;
 		LOG("ERROR: can't create '%s'", mountDir);
+		errno = saved_errno;
 		return 0;
 	}
 
@@ -139,8 +144,10 @@ int orbis_SaveMount(const save_entry_t *save, uint32_t mount_mode, char* mount_p
 	int mountErrorCode = mountSave(volumePath, keyPath, mountDir);
 	if (mountErrorCode < 0)
 	{
+		int saved_errno = errno;
 		LOG("ERROR (%X): can't mount '%s/%s'", mountErrorCode, save->title_id, save->dir_name);
 		rmdir(mountDir);
+		errno = saved_errno;
 		return 0;
 	}
 

@@ -566,6 +566,9 @@ static int worker(void *unused)
     if (current_action == GOOGLE_UPLOAD) {
         message("Preparing decrypted ZIP backup...");
         if (!google_backup_stage(&backup,upload_cancelled,NULL)) {
+            SDL_LockMutex(lock);
+            snprintf(state.preparation_details, sizeof(state.preparation_details), "%s", backup.diagnostic);
+            SDL_UnlockMutex(lock);
             message(backup.mount_blocked ? "Save unmount failed. Restart the app before further save operations." :
                 "Could not prepare backup. Source save was not changed.");
             goto done;

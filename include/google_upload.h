@@ -11,6 +11,7 @@
 typedef struct {
     char game[1024], title[32], directory[64];
     char temp_dir[256], archive[288], utc[32], md5[33];
+    char diagnostic[192]; /* Worker-owned, copied to UI under its existing mutex. */
     uint32_t user;
     uint64_t size;
     int mount_blocked;

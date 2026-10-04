@@ -20,5 +20,16 @@ build/host/test_google_upload
 cc -std=gnu11 -Wall -Wextra -Werror -Wno-deprecated-declarations -fsanitize=address,undefined -g \
   -DGOOGLE_BACKUP_CACHE='"build/host/cache/"' \
   -Itools/upload_host_include -Itools/host_include -Iinclude tools/test_google_save.c \
-  source/google_save.c source/google_backup.c source/save_zip.c -lzip -lmbedcrypto -o build/host/test_google_save
+  source/google_save.c source/google_backup.c source/save_zip.c -lzip -lmbedcrypto \
+  -Wl,--wrap=mkdtemp,--wrap=time -o build/host/test_google_save
 build/host/test_google_save
+for platform in host ps4; do
+  platform_flag=''
+  if [ "$platform" = ps4 ]; then platform_flag='-D__PS4__'; fi
+  cc -std=gnu11 -Wall -Wextra -Werror -Wno-deprecated-declarations -fsanitize=address,undefined -g \
+    $platform_flag -Iinclude tools/test_save_zip.c source/save_zip.c -lzip \
+    -Wl,--wrap=zip_open,--wrap=zip_register_cancel_callback_with_state,--wrap=opendir,--wrap=readdir,--wrap=lstat \
+    -Wl,--wrap=zip_add_dir,--wrap=zip_source_file,--wrap=zip_add,--wrap=zip_file_set_external_attributes,--wrap=closedir,--wrap=zip_close \
+    -o build/host/test_save_zip_$platform
+  build/host/test_save_zip_$platform
+done

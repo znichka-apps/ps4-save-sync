@@ -19,6 +19,7 @@
 #include "ps1card.h"
 #include "svpng.h"
 #include "google_drive.h"
+#include "save_zip.h"
 
 static char host_buf[256];
 
@@ -99,6 +100,7 @@ static void zipSave(const save_entry_t* entry, const char* exp_path)
 	struct tm t = get_local_time();
 	char* tmp;
 	int ret;
+	char diagnostic[SAVE_ZIP_DIAGNOSTIC_SIZE];
 
 	if (mkdirs(exp_path) != SUCCESS)
 	{
@@ -110,11 +112,11 @@ static void zipSave(const save_entry_t* entry, const char* exp_path)
 
 	snprintf(zip_file, sizeof(zip_file), "%s%s-%s_%d-%02d-%02d_%02d%02d%02d.zip", exp_path, entry->title_id, entry->dir_name, t.tm_year+1900, t.tm_mon+1, t.tm_mday, t.tm_hour, t.tm_min, t.tm_sec);
 
-	tmp = strdup(entry->path);
-	*strrchr(tmp, '/') = 0;
-	*strrchr(tmp, '/') = 0;
-
-	ret = zip_directory(tmp, entry->path, zip_file);
+	tmp = entry->path ? strdup(entry->path) : NULL;
+	char *slash = tmp ? strrchr(tmp, '/') : NULL;
+	if (slash) { *slash = 0; slash = strrchr(tmp, '/'); }
+	if (slash) *slash = 0;
+	ret = zip_directory_diagnostic(slash ? tmp : NULL, entry->path, zip_file, NULL, NULL, diagnostic, sizeof(diagnostic));
 	free(tmp);
 
 	if (ret)
@@ -134,7 +136,7 @@ static void zipSave(const save_entry_t* entry, const char* exp_path)
 	stop_loading_screen();
 	if (!ret)
 	{
-		show_message("%s\n%s", _("Error! Can't export save game to:"), exp_path);
+		show_message("%s\n%s", _("Error! Can't export save game."), diagnostic);
 		return;
 	}
 

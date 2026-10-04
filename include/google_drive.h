@@ -9,6 +9,7 @@ typedef struct {
     int mount_blocked;
     uint64_t completed_bytes, total_bytes;
     char message[192];
+    char preparation_details[192];
     char discovery_details[640];
     char verification_url[256];
     char user_code[64];

@@ -58,6 +58,7 @@ int google_drive_ui_frame(void)
     SetFontColor(APP_FONT_COLOR | 0xFF, 0);
     /* Wrap sanitized text; reserve generous width for Google's returned values. */
     google_text(status.message, 250);
+    if (status.preparation_details[0]) google_text(status.preparation_details, 440);
     if (status.total_bytes)
         DrawFormatString(180, 370, "Upload: %llu / %llu bytes (%u%%)",
             (unsigned long long)status.completed_bytes, (unsigned long long)status.total_bytes,
