@@ -14,10 +14,11 @@
 #include "google_build_config.h"
 #include "google_drive.h"
 #include "google_store.h"
+#include "google_ca.h"
 
 #define SCOPE "https://www.googleapis.com/auth/drive.file"
 #define DISCOVERY_URL "https://accounts.google.com/.well-known/openid-configuration"
-#define CA_PATH "/mnt/sandbox/PSSY00001_000/app0/assets/google/cacert.pem"
+#define CA_PATH GOOGLE_CA_PATH
 #define TOKEN_URL "https://oauth2.googleapis.com/token"
 #define DEVICE_URL "https://oauth2.googleapis.com/device/code"
 #define LIST_URL "https://www.googleapis.com/drive/v3/files?pageSize=1&fields=files(id)"
@@ -29,6 +30,7 @@ static SDL_atomic_t cancelled;
 static google_drive_status state;
 static uint32_t current_user;
 static int current_action;
+static int ca_request_failed;
 
 static void wipe(void *p, size_t n)
 {
@@ -97,7 +99,7 @@ static void discovery_error_detail(char *out, size_t capacity, const char *error
     wipe(lower, sizeof(lower));
 }
 
-static void discovery_context(const char *error)
+static void discovery_context(const char *error, const google_ca_context *ca_context)
 {
     struct stat info;
     int exists = stat(CA_PATH, &info) == 0;
@@ -110,13 +112,14 @@ static void discovery_context(const char *error)
         if (fclose(ca) != 0) readable = 0;
     }
     curl_version_info_data *version = curl_version_info(CURLVERSION_FIRST);
-    char curl_version[48], tls[64], details[144], context[384];
+    char curl_version[48], tls[64], details[144], context[640], ca_details[192];
     diagnostic_text(curl_version, sizeof(curl_version), version ? version->version : NULL);
     diagnostic_text(tls, sizeof(tls), version ? version->ssl_version : NULL);
     discovery_error_detail(details, sizeof(details), error);
-    snprintf(context, sizeof(context), "CA: exists=%s; readable=%s\nlibcurl: %s\nTLS backend: %s\nDetails: %s",
+    google_ca_diagnostic(ca_context, ca_details, sizeof(ca_details));
+    snprintf(context, sizeof(context), "CA: exists=%s; readable=%s\nlibcurl: %s\nTLS backend: %s\nDetails: %s\n%s",
         exists ? "yes" : (stat_error == ENOENT ? "no" : "unknown"), readable ? "yes" : "no",
-        curl_version, tls, details);
+        curl_version, tls, details, ca_details);
     SDL_LockMutex(lock);
     snprintf(state.discovery_details, sizeof(state.discovery_details), "%s", context);
     SDL_UnlockMutex(lock);
@@ -176,6 +179,9 @@ static cJSON *request(const char *url, const char *form, const char *access, lon
     char error[CURL_ERROR_SIZE] = {0};
     int discovery = !form && !access && !strcmp(url, DISCOVERY_URL);
     CURLcode result = CURLE_OK;
+    google_ca_context ca_context;
+    google_ca_init(&ca_context);
+    ca_request_failed = 0;
     const char *failure = NULL, *failed_option = NULL;
     cJSON *json = NULL;
     *status = 0;
@@ -189,15 +195,29 @@ static cJSON *request(const char *url, const char *form, const char *access, lon
         headers = next;
     }
 #define OPT(k,v) do { result = curl_easy_setopt(curl, k, v); \
-    if (result != CURLE_OK) { failure = "setup"; failed_option = #k; goto done; } } while (0)
+    if (result != CURLE_OK) { failure = "setup"; failed_option = #k; \
+        if (k == CURLOPT_SSL_CTX_FUNCTION || k == CURLOPT_SSL_CTX_DATA || \
+            k == CURLOPT_CAINFO || k == CURLOPT_CAPATH || k == CURLOPT_FRESH_CONNECT || \
+            k == CURLOPT_FORBID_REUSE || k == CURLOPT_SSL_SESSIONID_CACHE) { \
+            ca_request_failed = 1; ca_context.problem = "TLS CA option setup failed"; } \
+        goto done; } } while (0)
     if (discovery) { OPT(CURLOPT_ERRORBUFFER, error); }
+    result = google_ca_load(&ca_context);
+    if (result != CURLE_OK) { failure = "CA loading"; ca_request_failed = 1; goto done; }
     OPT(CURLOPT_URL, url);
     OPT(CURLOPT_PROTOCOLS, (long)CURLPROTO_HTTPS);
     OPT(CURLOPT_REDIR_PROTOCOLS, (long)CURLPROTO_HTTPS);
     OPT(CURLOPT_FOLLOWLOCATION, 0L);
     OPT(CURLOPT_SSL_VERIFYPEER, 1L);
     OPT(CURLOPT_SSL_VERIFYHOST, 2L);
-    OPT(CURLOPT_CAINFO, CA_PATH);
+    /* NULL skips only mbedTLS's file/path loaders, not peer/hostname checks. */
+    OPT(CURLOPT_CAINFO, NULL);
+    OPT(CURLOPT_CAPATH, NULL);
+    OPT(CURLOPT_SSL_CTX_FUNCTION, google_ca_ssl_context);
+    OPT(CURLOPT_SSL_CTX_DATA, &ca_context);
+    OPT(CURLOPT_FRESH_CONNECT, 1L);
+    OPT(CURLOPT_FORBID_REUSE, 1L);
+    OPT(CURLOPT_SSL_SESSIONID_CACHE, 0L);
     OPT(CURLOPT_SSLVERSION, (long)CURL_SSLVERSION_TLSv1_2);
     OPT(CURLOPT_VERBOSE, 0L);
     OPT(CURLOPT_NOSIGNAL, 1L);
@@ -210,7 +230,16 @@ static cJSON *request(const char *url, const char *form, const char *access, lon
     OPT(CURLOPT_XFERINFOFUNCTION, progress);
     if (form) { OPT(CURLOPT_POSTFIELDS, form); }
     result = SDL_AtomicGet(&cancelled) ? CURLE_ABORTED_BY_CALLBACK : curl_easy_perform(curl);
-    if (result != CURLE_OK) { failure = "transport"; goto done; }
+    if (result != CURLE_OK) {
+        failure = "transport";
+        if (ca_context.problem) ca_request_failed = 1;
+        goto done;
+    }
+    if (!ca_context.attached) {
+        result = CURLE_SSL_CONNECT_ERROR; failure = "TLS CA context"; ca_request_failed = 1;
+        ca_context.problem = "TLS CA callback was not invoked";
+        goto done;
+    }
     result = curl_easy_getinfo(curl, CURLINFO_RESPONSE_CODE, status);
     if (result != CURLE_OK) { failure = "HTTP status lookup"; goto done; }
     if (discovery && *status != 200) { failure = "HTTP"; goto done; }
@@ -219,8 +248,10 @@ static cJSON *request(const char *url, const char *form, const char *access, lon
 done:
     /* Keep callback/form/header storage alive until the easy handle is gone. */
     if (curl) curl_easy_cleanup(curl);
-    if (discovery) {
-        discovery_context(error);
+    if (discovery || ca_request_failed) {
+        /* Public CA state only, even for authenticated requests; never emit
+           their curl error buffers, request data, or response bodies. */
+        discovery_context(discovery ? error : "", &ca_context);
         if (failure) {
             char summary[192], description[96];
             diagnostic_text(description, sizeof(description), curl_easy_strerror(result));
@@ -231,10 +262,12 @@ done:
             else if (failed_option)
                 snprintf(summary, sizeof(summary), "Discovery setup failed: %s. curl %d: %s", failed_option, (int)result, description);
             else
-                snprintf(summary, sizeof(summary), "Discovery %s failed. curl %d: %s", failure, (int)result, description);
+                snprintf(summary, sizeof(summary), "%s %s failed. curl %d: %s", discovery ? "Discovery" : "Google", failure, (int)result, description);
             message(summary);
         }
     }
+    /* The SSL config holds pointers into this chain until easy_cleanup ends. */
+    google_ca_free(&ca_context);
     wipe(error, sizeof(error));
     if (b.data) { wipe(b.data, RESPONSE_CAP + 1); free(b.data); }
     wipe(auth, sizeof(auth));
@@ -286,6 +319,7 @@ static int wait_until(double target)
 /* All form values are escaped, including registration and device/refresh codes. */
 static cJSON *post(const char *url, const char *key, const char *value, const char *grant, long *status)
 {
+    ca_request_failed = 0;
     CURL *c = curl_easy_init();
     char *id = NULL, *secret = NULL, *v = NULL, *g = NULL, *body = NULL;
     cJSON *j = NULL;
@@ -329,7 +363,7 @@ static int refresh_access(char *refresh, char *access)
     cJSON *replacement = cJSON_GetObjectItemCaseSensitive(j, "refresh_token");
     int rotated = cJSON_IsString(replacement) && strcmp(replacement->valuestring, refresh);
     int ok = status == 200 && accept_tokens(j, access, refresh, 0);
-    if (!ok) message(error_is(j, "invalid_grant") ?
+    if (!ok && !ca_request_failed) message(error_is(j, "invalid_grant") ?
         "Google connection expired or revoked. Disconnect, then connect again." :
         "Could not refresh access. Check network, TLS certificates, and console clock.");
     /* Preserve a replacement refresh token even if the next Drive request fails
@@ -370,7 +404,8 @@ static int authorize(char *access, char *refresh)
         !copy_string(j, "device_code", device, sizeof(device), 1) ||
         !copy_string(j, "verification_url", url, sizeof(url), 1) ||
         !copy_string(j, "user_code", code, sizeof(code), 1)) {
-        message("Google device authorization failed. Try connecting again later."); goto done;
+        if (!ca_request_failed) message("Google device authorization failed. Try connecting again later.");
+        goto done;
     }
     SDL_LockMutex(lock);
     strcpy(state.verification_url, url);
@@ -384,7 +419,7 @@ static int authorize(char *access, char *refresh)
         if (!wait_until(target)) break;
         j = post(TOKEN_URL, "device_code", device, "urn:ietf:params:oauth:grant-type:device_code", &status);
         if (now() >= deadline) { message("Authorization expired. Connect again for a new code."); break; }
-        if (!j) { message("Network or TLS failure. Connect again to retry."); break; }
+        if (!j) { if (!ca_request_failed) message("Network or TLS failure. Connect again to retry."); break; }
         if (error_is(j, "authorization_pending")) continue;
         if (error_is(j, "slow_down")) { interval += 5; continue; }
         if (error_is(j, "access_denied")) { message("Google authorization denied."); break; }
@@ -435,7 +470,8 @@ static int worker(void *unused)
     }
     if (status != 200 || !cJSON_IsArray(cJSON_GetObjectItemCaseSensitive(j, "files")) ||
         cJSON_GetObjectItemCaseSensitive(j, "error")) {
-        message("Drive files.list failed. Check network and Drive API configuration."); goto done;
+        if (!ca_request_failed) message("Drive files.list failed. Check network and Drive API configuration.");
+        goto done;
     }
     if (!begin_commit()) goto done;
     message(google_store(current_user, GOOGLE_STORE_WRITE, refresh, TOKEN_CAP) ?

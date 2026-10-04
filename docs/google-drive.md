@@ -57,6 +57,16 @@ The Google module uses fresh libcurl handles with peer and hostname verification
 required, TLS 1.2 minimum, HTTPS-only protocols, no redirects or verbose logging,
 and a packaged Mozilla CA bundle. It never calls Apollo's insecure HTTP helper.
 Certificate failure, missing CA file, or a wrong console clock fails closed.
+For the PS4 mbedTLS backend, the CA bundle is read sequentially in bounded chunks
+(512 KiB maximum), without seek operations, and NUL-terminated for
+`mbedtls_x509_crt_parse`. Any nonzero parser result, including partial parsing,
+fails closed. The verified mbedTLS backend receives the parsed trust chain through
+libcurl's SSL-context callback. `CAINFO` and `CAPATH` are NULL to bypass only the
+built-in certificate-file loader; peer and hostname verification remain enabled.
+The callback changes only the trust chain, preserving curl's other validation.
+Each request owns its chain until after `curl_easy_cleanup`; fresh connections,
+disabled reuse, and disabled TLS session caching prevent contexts from escaping
+that lifetime. Other TLS backends are refused before casting the context.
 Unauthenticated discovery failures have a dedicated screen diagnostic: failed
 libcurl option or transport error number and `curl_easy_strerror` text, non-200
 HTTP status, malformed/non-object JSON, or missing/unexpected device endpoint.
@@ -65,8 +75,10 @@ libcurl's version/TLS backend. Discovery uses a `CURL_ERROR_SIZE` error buffer
 kept alive through `curl_easy_cleanup`. Only allowlisted error reasons and a
 strictly formatted mbedTLS code reach the UI; raw error text, URLs/proxy details,
 headers, request bodies, and response bodies are withheld. Successful discovery
-clears these details before device authorization; authenticated requests never
-populate them. Diagnostics wrap within the existing Google screen.
+clears these details before device authorization. CA loading/parser/context
+failures also show safe local diagnostics during authenticated requests: bytes
+read, parser result, and callback status, without their error buffers or response
+bodies. Diagnostics wrap within the existing Google screen.
 Responses are bounded and parsed using unmodified cJSON 1.7.19. Token-bearing
 application buffers are wiped before freeing; secrets/responses never enter
 debug logs. Network requests have 10-second connection and 30-second total
@@ -83,8 +95,8 @@ It sends no revocation request, so another console's authorization is unaffected
 
 ## Host checks
 
-On Linux with a C compiler, libcurl development headers, and SDL2 development
-headers:
+On Linux with a C compiler, libcurl, mbedTLS, and SDL2 development headers
+(`libcurl4-openssl-dev libmbedtls-dev libsdl2-dev` on Ubuntu):
 
 ```sh
 sh tools/test_google_host.sh
@@ -100,12 +112,17 @@ disconnect. It asserts secure transport options
 on every mocked request. Store tests use a host SDK shim and mocked mounts but
 real file operations, including per-user isolation, fsync/rename failures
 preserving previous credentials, mount/unmount failures, malformed credential
-files, and deletion. These are **not PS4 ABI, TLS-backend, or runtime tests**.
+files, and deletion. These are **not PS4 ABI, live TLS transport, or runtime tests**.
 Discovery tests also cover failed setopt/status lookup, error-buffer lifetime
 through cleanup, sanitized TLS/proxy details, CA presence/readability, HTTP/JSON
-failure distinctions, endpoint validation, and no diagnostics on authenticated
-failures. The actual installed-console discovery error must be observed after
-deploying this diagnostic build; no cause or runtime fix is claimed by host tests.
+failure distinctions and endpoint validation. CA tests use the real bundled
+certificates, parser, and SSL configuration with mocked backend/file failures:
+short sequential reads, empty/oversized/NUL/malformed/partially parsed bundles,
+allocation/read/close failures, backend mismatch, missing callback/context,
+reuse-guard failure, unchanged configuration outside trust anchors, and chain
+lifetime through curl cleanup. Authenticated failures expose only local CA
+diagnostics. The reported certificate-file I/O failure's exact operation remains
+unconfirmed; host checks do not establish that this fixes the installed console.
 
 ## Remaining PS4 verification
 

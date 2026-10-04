@@ -9,16 +9,23 @@
 #include <sys/stat.h>
 #include <SDL2/SDL.h>
 #include <curl/curl.h>
+#include <mbedtls/ssl.h>
+#include <mbedtls/version.h>
+#include "google_ca.h"
 #include "google_store.h"
 #include "google_drive.h"
 
 typedef struct {
-    const char *url, *form, *ca;
+    const char *url, *form, *ca, *capath;
     size_t (*receive)(void*, size_t, size_t, void*);
     void *buffer;
     long peer, host, redirect, protocols, verbose;
     long status;
     char *error;
+    CURLcode (*ssl_callback)(CURL*, void*, void*);
+    google_ca_context *ssl_data;
+    mbedtls_ssl_config tls_config;
+    long fresh, forbid, session_cache;
 } mock_handle;
 typedef struct { long status; const char *json; CURLcode result; double delay; } reply;
 static reply replies[20];
@@ -30,6 +37,22 @@ static char stored[8192];
 static CURLoption fail_option;
 static int ca_exists, ca_readable, fail_getinfo;
 static const char *mock_error_text;
+static int wrong_backend, skip_ca_callback, null_ca_context;
+
+#if MBEDTLS_VERSION_NUMBER >= 0x03000000
+#define CONFIG_FIELD(config, name) ((config).MBEDTLS_PRIVATE(name))
+#else
+#define CONFIG_FIELD(config, name) ((config).name)
+#endif
+
+static curl_version_info_data *mock_version(CURLversion age)
+{
+    static curl_version_info_data info;
+    assert(age == CURLVERSION_FIRST);
+    info.version = "7.64.1";
+    info.ssl_version = wrong_backend ? "OpenSSL/test" : "mbedTLS/test";
+    return &info;
+}
 
 static int mock_stat(const char *path, struct stat *info)
 {
@@ -46,7 +69,15 @@ static FILE *mock_ca_open(const char *path, const char *mode)
     return fopen("assets/google/cacert.pem", "rb");
 }
 
-static CURL *mock_init(void) { return (CURL*)calloc(1, sizeof(mock_handle)); }
+static CURL *mock_init(void)
+{
+    mock_handle *h = calloc(1, sizeof(*h));
+    assert(h);
+    mbedtls_ssl_config_init(&h->tls_config);
+    mbedtls_ssl_conf_authmode(&h->tls_config, MBEDTLS_SSL_VERIFY_OPTIONAL);
+    h->session_cache = 1;
+    return (CURL*)h;
+}
 static CURLcode mock_setopt(CURL *curl, CURLoption key, ...)
 {
     mock_handle *h = (void*)curl;
@@ -55,6 +86,7 @@ static CURLcode mock_setopt(CURL *curl, CURLoption key, ...)
     switch (key) {
     case CURLOPT_WRITEFUNCTION: h->receive = va_arg(ap, size_t (*)(void*, size_t, size_t, void*)); break;
     case CURLOPT_XFERINFOFUNCTION: (void)va_arg(ap, int (*)(void*, curl_off_t, curl_off_t, curl_off_t, curl_off_t)); break;
+    case CURLOPT_SSL_CTX_FUNCTION: h->ssl_callback = va_arg(ap, CURLcode (*)(CURL*, void*, void*)); break;
     default:
         if (key < CURLOPTTYPE_OBJECTPOINT) {
             long v = va_arg(ap, long);
@@ -63,10 +95,15 @@ static CURLcode mock_setopt(CURL *curl, CURLoption key, ...)
             if (key == CURLOPT_FOLLOWLOCATION) h->redirect = v;
             if (key == CURLOPT_PROTOCOLS) h->protocols = v;
             if (key == CURLOPT_VERBOSE) h->verbose = v;
+            if (key == CURLOPT_FRESH_CONNECT) h->fresh = v;
+            if (key == CURLOPT_FORBID_REUSE) h->forbid = v;
+            if (key == CURLOPT_SSL_SESSIONID_CACHE) h->session_cache = v;
         } else {
             void *v = va_arg(ap, void*);
             if (key == CURLOPT_URL) h->url = v;
             if (key == CURLOPT_CAINFO) h->ca = v;
+            if (key == CURLOPT_CAPATH) h->capath = v;
+            if (key == CURLOPT_SSL_CTX_DATA) h->ssl_data = v;
             if (key == CURLOPT_POSTFIELDS) h->form = v;
             if (key == CURLOPT_WRITEDATA) h->buffer = v;
             if (key == CURLOPT_ERRORBUFFER) h->error = v;
@@ -79,7 +116,15 @@ static CURLcode mock_perform(CURL *curl)
 {
     mock_handle *h = (void*)curl;
     assert(h->peer == 1 && h->host == 2 && h->redirect == 0 && h->verbose == 0);
-    assert(h->protocols == CURLPROTO_HTTPS && h->ca && strstr(h->ca, "assets/google/cacert.pem"));
+    assert(h->protocols == CURLPROTO_HTTPS && !h->ca && !h->capath);
+    assert(h->fresh == 1 && h->forbid == 1 && h->session_cache == 0);
+    assert(h->ssl_callback && h->ssl_data && h->ssl_data->loaded);
+    if (!skip_ca_callback) {
+        CURLcode result = h->ssl_callback(curl, null_ca_context ? NULL : &h->tls_config, h->ssl_data);
+        if (result != CURLE_OK) return result;
+        assert(CONFIG_FIELD(h->tls_config, ca_chain) == &h->ssl_data->chain);
+        assert(CONFIG_FIELD(h->tls_config, authmode) == MBEDTLS_SSL_VERIFY_OPTIONAL);
+    }
     assert(h->url && !strncmp(h->url, "https://", 8));
     if (strstr(h->url, "/.well-known/")) assert(h->error && !h->error[0]);
     else assert(!h->error); /* Diagnostics must not capture authenticated details. */
@@ -117,6 +162,11 @@ static void mock_cleanup(CURL *curl)
     /* ASan checks that ERRORBUFFER remains alive and has CURL_ERROR_SIZE bytes
        until easy_cleanup finishes, including failed setup/perform paths. */
     if (h->error) h->error[CURL_ERROR_SIZE - 1] = 0;
+    if (h->ssl_data && h->ssl_data->loaded) {
+        assert(h->ssl_data->chain.raw.p && h->ssl_data->chain.raw.len);
+        if (h->ssl_data->attached) assert(CONFIG_FIELD(h->tls_config, ca_chain) == &h->ssl_data->chain);
+    }
+    mbedtls_ssl_config_free(&h->tls_config);
     free(curl);
 }
 static int mock_clock(clockid_t id, struct timespec *t)
@@ -135,10 +185,12 @@ static void mock_delay(Uint32 ms);
 #define curl_easy_getinfo mock_getinfo
 #define curl_easy_escape mock_escape
 #define curl_easy_cleanup mock_cleanup
+#define curl_version_info mock_version
 #define clock_gettime mock_clock
 #define SDL_Delay mock_delay
 #define stat(path, info) mock_stat(path, info)
 #define fopen mock_ca_open
+#include "../source/google_ca.c"
 #include "../source/google_drive.c"
 #undef stat
 #undef fopen
@@ -173,6 +225,7 @@ static void reset(int action)
     fake_time = 0; stored[0] = 0;
     SDL_AtomicSet(&cancelled, 0);
     fail_option = 0; fail_getinfo = 0; ca_exists = ca_readable = 1; mock_error_text = NULL;
+    wrong_backend = skip_ca_callback = null_ca_context = 0;
 }
 static void add(long status, const char *json) { replies[reply_count++] = (reply){status, json, CURLE_OK, 0}; }
 static void device(void)
@@ -189,7 +242,9 @@ int main(void)
     lock = SDL_CreateMutex(); assert(lock);
     /* The worker must retain specific discovery diagnostics through authorize. */
     CURLoption unsupported[] = {CURLOPT_ERRORBUFFER, CURLOPT_PROTOCOLS, CURLOPT_SSL_VERIFYHOST,
-                               CURLOPT_SSL_VERIFYPEER, CURLOPT_SSLVERSION};
+                               CURLOPT_SSL_VERIFYPEER, CURLOPT_SSLVERSION, CURLOPT_CAINFO,
+                               CURLOPT_CAPATH, CURLOPT_SSL_CTX_FUNCTION, CURLOPT_SSL_CTX_DATA,
+                               CURLOPT_FRESH_CONNECT, CURLOPT_FORBID_REUSE, CURLOPT_SSL_SESSIONID_CACHE};
     for (size_t i = 0; i < sizeof(unsupported) / sizeof(*unsupported); i++) {
         reset(GOOGLE_CONNECT); fail_option = unsupported[i]; run();
         assert(!reply_index && !writes && strstr(state.message, "setup failed"));
@@ -197,6 +252,16 @@ int main(void)
         assert(strstr(state.discovery_details, "CA: exists=yes; readable=yes"));
         assert(strstr(state.discovery_details, "libcurl:") && strstr(state.discovery_details, "TLS backend:"));
     }
+    reset(GOOGLE_CONNECT); wrong_backend = 1; run();
+    assert(!reply_index && !writes && strstr(state.discovery_details, "Expected mbedTLS backend"));
+    reset(GOOGLE_CONNECT); null_ca_context = 1; add(200, "{}"); run();
+    assert(!writes && strstr(state.discovery_details, "CA TLS context setup refused"));
+    reset(GOOGLE_CONNECT); skip_ca_callback = 1; add(200, "{}"); run();
+    assert(!writes && strstr(state.discovery_details, "TLS CA callback was not invoked"));
+    reset(GOOGLE_CHECK); strcpy(stored, "synthetic-old-refresh"); ca_readable = 0; run();
+    assert(!reply_index && !writes && strstr(state.message, "CA loading failed"));
+    assert(strstr(state.discovery_details, "CA open failed"));
+    assert(!strstr(state.discovery_details, "synthetic-old-refresh"));
     reset(GOOGLE_CONNECT); add(200, "{}"); replies[0].result = CURLE_PEER_FAILED_VERIFICATION;
     mock_error_text = "mbedTLS: (-0x2700) X509 - Certificate verification failed\nexternal detail"; run();
     assert(strstr(state.message, "transport failed") && strstr(state.message, "curl 60:"));
@@ -211,7 +276,8 @@ int main(void)
         add(200, "{}"); replies[0].result = CURLE_SSL_CACERT_BADFILE;
         mock_error_text = "Error reading ca cert file"; run();
         assert(strstr(state.discovery_details, exists ? "exists=yes; readable=no" : "exists=no; readable=no"));
-        assert(strstr(state.discovery_details, "CA certificate file could not be loaded"));
+        assert(strstr(state.discovery_details, "CA open failed"));
+        assert(strstr(state.discovery_details, "Bytes read: 0; parser: not run"));
     }
     reset(GOOGLE_CONNECT); add(503, "not JSON: private-response-secret"); run();
     assert(strstr(state.message, "HTTP 503") && !strstr(state.discovery_details, "private-response-secret"));
