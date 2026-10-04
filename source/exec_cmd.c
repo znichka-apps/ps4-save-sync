@@ -18,6 +18,7 @@
 #include "mcio.h"
 #include "ps1card.h"
 #include "svpng.h"
+#include "google_drive.h"
 
 static char host_buf[256];
 
@@ -1790,6 +1791,20 @@ static void toggleBrowserHistory(int usr)
 
 void execCodeCommand(code_entry_t* code, const char* codecmd)
 {
+    google_drive_status google_status;
+    google_drive_snapshot(&google_status);
+    if (google_status.busy || google_status.mount_blocked) return;
+    if (codecmd[0] == CMD_UPLOAD_GOOGLE) {
+        code->activated = 0;
+        if (selected_entry->type != FILE_TYPE_PS4 ||
+            !(selected_entry->flags & SAVE_FLAG_HDD) ||
+            (selected_entry->flags & (SAVE_FLAG_TROPHY|SAVE_FLAG_LOCKED))) return;
+        if (show_dialog(DIALOG_TYPE_YESNO, "Back up to Google Drive?\n[%s] %s\n%s",
+            selected_entry->title_id, selected_entry->dir_name, selected_entry->name))
+            google_drive_ui_upload(selected_entry->name,selected_entry->title_id,
+                selected_entry->dir_name,apollo_config.user_id);
+        return; /* Upload worker owns mounting: never enter generic mount below. */
+    }
 	/* Refuse private credentials even if an entry reaches us outside the save list. */
 	if (selected_entry->title_id && selected_entry->dir_name &&
 		!strcmp(selected_entry->title_id, "PSSY00001") &&

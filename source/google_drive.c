@@ -31,6 +31,46 @@ static google_drive_status state;
 static uint32_t current_user;
 static int current_action;
 static int ca_request_failed;
+static google_backup backup;
+
+typedef struct {
+    const google_upload_request *request;
+    uint64_t remaining;
+} upload_stream;
+static size_t stream_read(void *buffer, size_t size, size_t count, void *data)
+{
+    upload_stream *s = data;
+    if (SDL_AtomicGet(&cancelled) || (size && count > SIZE_MAX / size)) return CURL_READFUNC_ABORT;
+    size_t capacity = size * count;
+    if (capacity > 16384) capacity = 16384;
+    if (capacity > s->remaining) capacity = (size_t)s->remaining;
+    if (!capacity) return 0;
+    size_t n = fread(buffer, 1, capacity, s->request->file);
+    if (!n || ferror(s->request->file)) return CURL_READFUNC_ABORT;
+    s->remaining -= n;
+    return n;
+}
+static size_t upload_header(void *buffer, size_t size, size_t count, void *data)
+{
+    google_upload_response *r = data;
+    if (size && count > SIZE_MAX / size) return 0;
+    size_t n = size * count;
+    const char *line = buffer;
+    if (n >= 5 && !strncmp(line, "HTTP/", 5)) {
+        r->location[0] = r->range[0] = 0; r->invalid_headers = 0;
+    }
+    char *out = NULL; size_t capacity = 0, skip = 0;
+    if (n >= 9 && !strncasecmp(line,"Location:",9)) { out = r->location; capacity = sizeof(r->location); skip = 9; }
+    if (n >= 6 && !strncasecmp(line,"Range:",6)) { out = r->range; capacity = sizeof(r->range); skip = 6; }
+    if (out) {
+        while (skip < n && (line[skip] == ' ' || line[skip] == '\t')) skip++;
+        size_t end = n;
+        while (end > skip && (line[end-1] == '\r' || line[end-1] == '\n')) end--;
+        if (out[0] || end - skip >= capacity || memchr(line + skip,0,end-skip)) r->invalid_headers = 1;
+        else { memcpy(out,line+skip,end-skip); out[end-skip] = 0; }
+    }
+    return n;
+}
 
 static void wipe(void *p, size_t n)
 {
@@ -163,12 +203,20 @@ static size_t receive(void *data, size_t size, size_t count, void *opaque)
 }
 static int progress(void *p, curl_off_t a, curl_off_t b, curl_off_t c, curl_off_t d)
 {
-    (void)p; (void)a; (void)b; (void)c; (void)d;
+    (void)a; (void)b; (void)c;
+    upload_stream *stream = p;
+    if (stream && stream->request->file) {
+        SDL_LockMutex(lock);
+        state.completed_bytes = stream->request->offset + (d > 0 ? (uint64_t)d : 0);
+        state.total_bytes = stream->request->total;
+        SDL_UnlockMutex(lock);
+    }
     return SDL_AtomicGet(&cancelled);
 }
 
 /* Fresh handles, HTTPS only, no redirects, no verbose output, bounded responses. */
-static cJSON *request(const char *url, const char *form, const char *access, long *status)
+static cJSON *request_extended(const char *url, const char *form, const char *access, long *status,
+                              const google_upload_request *upload, google_upload_response *reply)
 {
     CURL *curl = curl_easy_init();
     struct curl_slist *headers = NULL;
@@ -180,6 +228,7 @@ static cJSON *request(const char *url, const char *form, const char *access, lon
     int discovery = !form && !access && !strcmp(url, DISCOVERY_URL);
     CURLcode result = CURLE_OK;
     google_ca_context ca_context;
+    upload_stream stream = {upload, upload ? upload->length : 0};
     google_ca_init(&ca_context);
     ca_request_failed = 0;
     const char *failure = NULL, *failed_option = NULL;
@@ -191,8 +240,28 @@ static cJSON *request(const char *url, const char *form, const char *access, lon
     if (access) {
         snprintf(auth, sizeof(auth), "Authorization: Bearer %s", access);
         struct curl_slist *next = curl_slist_append(headers, auth);
-        if (!next) goto done;
+        if (!next) { result = CURLE_OUT_OF_MEMORY; goto done; }
         headers = next;
+    }
+    if (upload) {
+        const char *type = upload->json ? "Content-Type: application/json; charset=UTF-8" : "Content-Type: application/zip";
+        struct curl_slist *next = curl_slist_append(headers,type);
+        if (!next) { result = CURLE_OUT_OF_MEMORY; goto done; } headers = next;
+        next = curl_slist_append(headers,"Expect:");
+        if (!next) { result = CURLE_OUT_OF_MEMORY; goto done; } headers = next;
+        char value[128];
+        if (upload->range) {
+            snprintf(value,sizeof(value),"Content-Range: %s",upload->range);
+            next = curl_slist_append(headers,value);
+            if (!next) { result = CURLE_OUT_OF_MEMORY; goto done; } headers = next;
+        }
+        if (upload->json && upload->total) {
+            next = curl_slist_append(headers,"X-Upload-Content-Type: application/zip");
+            if (!next) { result = CURLE_OUT_OF_MEMORY; goto done; } headers = next;
+            snprintf(value,sizeof(value),"X-Upload-Content-Length: %llu",(unsigned long long)upload->total);
+            next = curl_slist_append(headers,value);
+            if (!next) { result = CURLE_OUT_OF_MEMORY; goto done; } headers = next;
+        }
     }
 #define OPT(k,v) do { result = curl_easy_setopt(curl, k, v); \
     if (result != CURLE_OK) { failure = "setup"; failed_option = #k; \
@@ -228,6 +297,24 @@ static cJSON *request(const char *url, const char *form, const char *access, lon
     OPT(CURLOPT_WRITEDATA, &b);
     OPT(CURLOPT_NOPROGRESS, 0L);
     OPT(CURLOPT_XFERINFOFUNCTION, progress);
+    OPT(CURLOPT_XFERINFODATA, upload ? &stream : NULL);
+    if (upload) {
+        OPT(CURLOPT_HEADERFUNCTION, upload_header);
+        OPT(CURLOPT_HEADERDATA, reply);
+        OPT(CURLOPT_CUSTOMREQUEST, upload->method);
+        if (upload->file) {
+            if (upload->offset > INT64_MAX || fseeko(upload->file,(off_t)upload->offset,SEEK_SET) != 0) {
+                result = CURLE_READ_ERROR; goto done;
+            }
+            OPT(CURLOPT_UPLOAD, 1L);
+            OPT(CURLOPT_READFUNCTION, stream_read);
+            OPT(CURLOPT_READDATA, &stream);
+            OPT(CURLOPT_INFILESIZE_LARGE, (curl_off_t)upload->length);
+        } else if (upload->json || !strcmp(upload->method,"PUT")) {
+            OPT(CURLOPT_POSTFIELDS, upload->json ? upload->json : "");
+            OPT(CURLOPT_POSTFIELDSIZE_LARGE, (curl_off_t)(upload->json ? strlen(upload->json) : 0));
+        }
+    }
     if (form) { OPT(CURLOPT_POSTFIELDS, form); }
     result = SDL_AtomicGet(&cancelled) ? CURLE_ABORTED_BY_CALLBACK : curl_easy_perform(curl);
     if (result != CURLE_OK) {
@@ -248,6 +335,7 @@ static cJSON *request(const char *url, const char *form, const char *access, lon
 done:
     /* Keep callback/form/header storage alive until the easy handle is gone. */
     if (curl) curl_easy_cleanup(curl);
+    if (reply) { reply->transport = result; reply->status = *status; }
     if (discovery || ca_request_failed) {
         /* Public CA state only, even for authenticated requests; never emit
            their curl error buffers, request data, or response bodies. */
@@ -276,6 +364,10 @@ done:
     curl_slist_free_all(headers);
     return json;
 #undef OPT
+}
+static cJSON *request(const char *url, const char *form, const char *access, long *status)
+{
+    return request_extended(url,form,access,status,NULL,NULL);
 }
 
 static int copy_string(cJSON *j, const char *key, char *out, size_t cap, int printable)
@@ -435,9 +527,35 @@ done:
     return ok;
 }
 
+typedef struct { char *refresh, *access; } upload_auth;
+static int upload_cancelled(void *data) { (void)data; return SDL_AtomicGet(&cancelled); }
+static int upload_refresh(void *data)
+{
+    upload_auth *auth = data; return refresh_access(auth->refresh,auth->access);
+}
+static int upload_wait(void *data, unsigned seconds)
+{
+    (void)data; return wait_until(now() + seconds);
+}
+static void upload_progress(void *data, uint64_t completed, uint64_t total)
+{
+    (void)data; SDL_LockMutex(lock);
+    state.completed_bytes = completed; state.total_bytes = total;
+    SDL_UnlockMutex(lock);
+}
+static void upload_request(void *data, const google_upload_request *q, google_upload_response *r)
+{
+    upload_auth *auth = data; long status;
+    /* Session URLs must be validated before any Authorization header is created. */
+    if (!strcmp(q->method,"PUT") && !google_upload_session_url(q->url)) {
+        r->transport = CURLE_URL_MALFORMAT; return;
+    }
+    r->json = request_extended(q->url,NULL,auth->access,&status,q,r);
+}
 static int worker(void *unused)
 {
     (void)unused;
+    int upload_handled = 0;
     char *refresh = calloc(1, TOKEN_CAP), *access = calloc(1, TOKEN_CAP);
     long status = 0;
     cJSON *j = NULL;
@@ -445,6 +563,14 @@ static int worker(void *unused)
         message("Console monotonic clock unavailable. Google operation stopped."); goto done;
     }
     if (!refresh || !access) { message("Not enough memory for Google connection."); goto done; }
+    if (current_action == GOOGLE_UPLOAD) {
+        message("Preparing decrypted ZIP backup...");
+        if (!google_backup_stage(&backup,upload_cancelled,NULL)) {
+            message(backup.mount_blocked ? "Save unmount failed. Restart the app before further save operations." :
+                "Could not prepare backup. Source save was not changed.");
+            goto done;
+        }
+    }
     if (current_action == GOOGLE_DISCONNECT) {
         message(google_store(current_user, GOOGLE_STORE_CLEAR, refresh, TOKEN_CAP) ?
             "Disconnected on this PS4 user. Other consoles are unaffected." : "Could not clear local credentials.");
@@ -461,6 +587,20 @@ static int worker(void *unused)
         if (!refresh_access(refresh, access)) goto done;
     }
     if (SDL_AtomicGet(&cancelled)) goto done;
+    if (current_action == GOOGLE_UPLOAD) {
+        message("Uploading save backup to Google Drive...");
+        upload_auth auth = {refresh,access};
+        google_upload_io io = {&auth,upload_request,upload_refresh,upload_cancelled,upload_progress,upload_wait};
+        int result = google_upload_run(&backup,&io); upload_handled = 1;
+        if (result == GOOGLE_UPLOAD_SUCCESS) {
+            upload_progress(NULL,backup.size,backup.size);
+            message("Backup complete. Drive confirmed ZIP size and checksum.");
+        } else if (result == GOOGLE_UPLOAD_UNCERTAIN)
+            message("Completion uncertain. Check Drive before retrying; a backup may exist.");
+        else if (result == GOOGLE_UPLOAD_CANCELLED) message("Backup cancelled. No completed upload confirmed.");
+        else if (!ca_request_failed) message("Backup failed. No verified completion; check connection and Drive.");
+        goto done;
+    }
     message("Checking Google Drive access...");
     j = request(LIST_URL, NULL, access, &status);
     if (status == 401 && !SDL_AtomicGet(&cancelled)) {
@@ -481,9 +621,18 @@ done:
     release(j);
     if (refresh) { wipe(refresh, TOKEN_CAP); free(refresh); }
     if (access) { wipe(access, TOKEN_CAP); free(access); }
-    if (SDL_AtomicGet(&cancelled)) message("Google operation cancelled.");
+    if (current_action == GOOGLE_UPLOAD) {
+        if (SDL_AtomicGet(&cancelled) && !upload_handled && !backup.mount_blocked) message("Backup cancelled before upload.");
+        if (!google_backup_cleanup(&backup)) {
+            SDL_LockMutex(lock);
+            size_t n = strlen(state.message);
+            snprintf(state.message + n,sizeof(state.message)-n," Cache cleanup failed.");
+            SDL_UnlockMutex(lock);
+        }
+    } else if (SDL_AtomicGet(&cancelled)) message("Google operation cancelled.");
     SDL_LockMutex(lock);
     state.busy = 0;
+    state.mount_blocked = backup.mount_blocked;
     state.user_code[0] = 0;
     state.verification_url[0] = 0;
     SDL_UnlockMutex(lock);
@@ -492,12 +641,12 @@ done:
 
 int google_drive_start(int action, uint32_t user)
 {
-    if (action < GOOGLE_CONNECT || action > GOOGLE_DISCONNECT) return 0;
+    if (action < GOOGLE_CONNECT || action > GOOGLE_UPLOAD) return 0;
     if (!lock) lock = SDL_CreateMutex();
     if (!lock) return 0;
     google_drive_status snapshot;
     google_drive_snapshot(&snapshot);
-    if (snapshot.busy) return 0;
+    if (snapshot.busy || snapshot.mount_blocked) return 0;
     if (thread) { SDL_WaitThread(thread, NULL); thread = NULL; }
     SDL_AtomicSet(&cancelled, 0);
     current_action = action; current_user = user;
@@ -513,6 +662,19 @@ int google_drive_start(int action, uint32_t user)
         message("Could not start Google connection worker."); return 0;
     }
     return 1;
+}
+int google_drive_upload_start(const char *game, const char *title, const char *directory, uint32_t user)
+{
+    google_drive_status status; google_drive_snapshot(&status);
+    if (status.busy || status.mount_blocked || !game || !title || !directory ||
+        strlen(game) >= sizeof(backup.game) || strlen(title) != 9 ||
+        !*directory || strlen(directory) >= sizeof(backup.directory) ||
+        !strcmp(directory,".") || !strcmp(directory,"..")) return 0;
+    for (const char *p = title; *p; p++) if (!isalnum((unsigned char)*p)) return 0;
+    for (const char *p = directory; *p; p++) if (*p == '/' || *p == '\\' || (unsigned char)*p < 32) return 0;
+    memset(&backup,0,sizeof(backup));
+    strcpy(backup.game,game); strcpy(backup.title,title); strcpy(backup.directory,directory); backup.user = user;
+    return google_drive_start(GOOGLE_UPLOAD,user);
 }
 void google_drive_snapshot(google_drive_status *out)
 {

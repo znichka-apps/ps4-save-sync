@@ -580,7 +580,6 @@ static void doAboutMenu(void)
 
 static void doOptionsMenu(void)
 {
-	if (google_drive_ui_frame()) return;
 	// Check the pads.
 	if(orbisPadGetButtonHold(ORBIS_PAD_BUTTON_UP))
 		move_selection_back(menu_options_maxopt, 1);
@@ -945,6 +944,7 @@ static void doPatchMenu(void)
 // Resets new frame
 void drawScene(void)
 {
+    if (google_drive_ui_frame()) return;
 	switch (menu_id)
 	{
 		case MENU_MAIN_SCREEN:

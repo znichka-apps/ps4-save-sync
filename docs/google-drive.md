@@ -1,9 +1,15 @@
-# Google Drive connection milestone
+# Google Drive connection and single-save backup
 
-This milestone connects Google Drive and checks `files.list` only. It does not
-upload, download, or restore saves. Package identity remains `PSSY00001` /
+This milestone connects Google Drive and uploads one selected PS4 HDD save.
+Downloads, restoration, bulk uploads, and automatic sync are not implemented.
+Package identity remains `PSSY00001` /
 `IV0000-PSSY00001_00-PS4SAVESYNC00000`, separate from Apollo. Existing upstream
 credits and licenses remain in place.
+
+Console testing reported by the owner confirms Google connection, Drive
+`files.list`, refresh after a full app restart, local disconnect, and reconnect.
+Those results cover authentication. The new upload's PS4 build and runtime
+verification remain pending.
 
 ## Build registration
 
@@ -93,10 +99,78 @@ execution also refuse it, preventing app save exports/backups from including it.
 Disconnect removes this user's token and leftover temporary file, then unmounts.
 It sends no revocation request, so another console's authorization is unaffected.
 
+## Single-save upload
+
+An individual PS4 HDD save has **Back up to Google Drive** under File Backup.
+Confirmation identifies its game, title ID, and save directory. This action is
+not offered for trophies, locked USB saves, or other platforms. The existing
+Google screen shows preparation/upload status, bytes and percentage, and Cancel.
+It blocks other app save/settings operations while the worker runs. A failed
+save unmount blocks further operations until app restart.
+
+The worker copies the selected metadata before starting and never depends on
+`selected_entry` or its temporary path. It uses the existing HDD mounting pipeline
+and shared `zip_directory` routine with exactly the `zipSave`/FTP relative layout:
+`SAVE_DIRECTORY/...`, including `sce_sys`. No owner index/XML sidecars are added.
+The shared ZIP walker now propagates enumeration/file/close errors instead of
+reporting partial archives as successful; libzip cancellation covers compression.
+It refuses symlinks and special files. All operations read source files; no
+resigning, SFO edits, or writes to the selected save are performed.
+
+Each ZIP lives in an exclusively created `cache/drive-XXXXXX/backup.zip`. Export
+and game-save unmount finish before hashing, mounting GoogleAuth, or networking.
+The worker hashes sequentially with bounded buffers and cleans only its own ZIP
+and directory on every exit. It does not recursively remove unknown files. A
+cleanup failure is reported alongside the upload outcome. App termination or a
+power loss can leave a cache directory; the existing explicit cache-clean action
+can remove it after restarting, with no upload active.
+
+Folder discovery pages through non-trashed, root-parent My Drive folders marked
+with private `appProperties.ps4SaveSync = ps4-save-sync.v1`. A folder named
+**PS4 Save Sync** with that marker is created only after a complete empty search.
+The same OAuth client/account reuses it across consoles, even if its name changes.
+If several marked folders exist, both consoles select the oldest creation time,
+with file ID as a deterministic tie-breaker. After creating a folder the worker
+performs another complete search before choosing the parent, resolving concurrent
+creators consistently. Drive does not provide atomic unique-folder creation:
+simultaneous first use can leave an extra empty marked folder; no folders are
+deleted automatically. Folder creation is not retried after a lost response.
+See Google's [folder guide](https://developers.google.com/workspace/drive/api/guides/folder)
+and [private properties guide](https://developers.google.com/workspace/drive/api/guides/properties).
+
+Each backup uses a new [pre-generated Drive file ID](https://developers.google.com/workspace/drive/api/guides/create-file#generate_ids_to_use_with_your_files)
+and a POST creation request. Earlier backups are never overwritten. Metadata
+version 1 is JSON in the file's `description`: gameName, titleId, saveDirectory,
+backupUtc (UTC ISO 8601), archiveFormat (`apollo-decrypted-zip`),
+archiveFormatVersion (1), byteSize, checksumAlgorithm (`md5`), and checksum.
+JSON escaping preserves game names without the 124-byte app-property limit.
+The backup also carries the stable app marker and backupVersion in appProperties.
+No credentials, hardware IDs, or account/user IDs are added to metadata. The ZIP
+retains the existing decrypted export contents, including the game's original SFO.
+MD5 is used to compare against Drive's native `md5Checksum`, not as authentication.
+
+The [documented resumable upload protocol](https://developers.google.com/workspace/drive/api/guides/manage-uploads#resumable)
+uses 256 KiB chunks (except the final chunk), streamed from disk with at most
+16 KiB per curl read callback. Session URLs require the exact HTTPS Google origin
+and upload path, with resumable/upload_id query parameters, before authorization
+is sent. Redirects, verbose logging, and session-URL logging remain disabled;
+all requests retain verified mbedTLS trust and hostname checks.
+
+Server Range responses determine the next offset. Interrupted/5xx/rate-limited
+requests use bounded backoff and empty PUT status probes. A 401 refreshes using
+the existing rotation-safe store and probes status before resending bytes.
+Expired sessions and terminal errors can check the allocated file ID; they never
+start a replacement upload. Success requires HTTP completion (or a confirming
+file lookup), matching file ID, size, and MD5. Unverified completion, lost final
+responses, and cancellation during the final chunk are reported as **uncertain**.
+Check Drive before retrying that outcome; a manual new attempt creates another
+backup. Sessions are not persisted or resumed after app restart. Cancellation
+stops local work; it does not revoke OAuth or delete remote files.
+
 ## Host checks
 
-On Linux with a C compiler, libcurl, mbedTLS, and SDL2 development headers
-(`libcurl4-openssl-dev libmbedtls-dev libsdl2-dev` on Ubuntu):
+On Linux with a C compiler, libcurl, mbedTLS, libzip, and SDL2 development headers
+(`libcurl4-openssl-dev libmbedtls-dev libzip-dev libsdl2-dev` on Ubuntu):
 
 ```sh
 sh tools/test_google_host.sh
@@ -122,7 +196,18 @@ allocation/read/close failures, backend mismatch, missing callback/context,
 reuse-guard failure, unchanged configuration outside trust anchors, and chain
 lifetime through curl cleanup. Authenticated failures expose only local CA
 diagnostics. The reported certificate-file I/O failure's exact operation remains
-unconfirmed; host checks do not establish that this fixes the installed console.
+unconfirmed. The owner has since confirmed working console authentication with
+the in-memory CA path; host checks remain simulations.
+
+Upload host tests cover real archive entry names and contents, source preservation,
+unique staging paths, cancellation and failures with required unmount, no token
+mount/networking after staging failure, private credential guards, metadata
+escaping, folder creation/reuse/pagination, chunk alignment and partial-offset
+recovery, 401 refresh failure, lost final-response recovery without duplicate
+creation, invalid session/header rejection, and size/checksum verification. The
+production curl read/header callbacks are exercised with mocked transport, real
+disk reads, and the same verified CA setup. PS4 save mounts and live Drive uploads
+remain outside the host checks.
 
 ## Remaining PS4 verification
 
@@ -141,6 +226,36 @@ install it, and verify:
 - Debug logging enabled still emits no credentials or token responses.
 
 No PS4 build, installation, or runtime success is asserted by the host checks.
+
+## Test one small save on PS4 (pending)
+
+1. Build and package the local changes with OpenOrbis, the ignored OAuth build
+   header, and the normal verified libcurl/mbedTLS/libzip dependencies. Install
+   the separate PSSY00001 package. No successful upload build/runtime is asserted.
+2. Use the same local PS4 user whose Google connection was confirmed. In Settings,
+   run Connection Status and confirm success. Return to HDD saves and select one
+   small, non-trophy PS4 save. Record its game/title ID/save directory; retain an
+   existing local export for comparison if available.
+3. Choose **Back up to Google Drive** under File Backup. Confirm the displayed
+   game/save, then wait for preparation and upload. Verify controller input and
+   the byte/percentage display stay responsive.
+4. Expect **Backup complete. Drive confirmed ZIP size and checksum.** In that
+   Google account's My Drive, open **PS4 Save Sync** and confirm one new ZIP.
+   Download it using the Drive website on a computer (the app has no download
+   action), inspect `SAVE_DIRECTORY/...` and `sce_sys`, and compare its size/MD5
+   and files with the original export. Confirm metadata in the file description.
+5. Launch the game and verify the original save still loads. Repeat one backup:
+   expect the same marked folder and a second file, with the first untouched.
+   Repeat from the other PS4 using the same OAuth client/account to verify reuse.
+6. On another attempt, cancel during preparation or an early chunk; confirm a
+   cancellation result, released mounts, and removal of that owned cache ZIP.
+   Interrupt networking during upload, restore it within the bounded retries,
+   and verify status-probe recovery produces one file. If the final response is
+   lost or cancellation happens during final upload, an uncertain result is
+   acceptable: inspect Drive before manually retrying.
+7. Confirm source save/settings exports still work, credential export guards and
+   authentication reconnect/refresh still pass, no GoogleAuth/game mounts
+   overlap, and debug logs contain no tokens, session URLs, or response bodies.
 
 ## Credential exclusion
 

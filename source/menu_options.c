@@ -11,6 +11,13 @@
 #include "google_drive.h"
 
 static int google_panel;
+void google_drive_ui_upload(const char *game, const char *title, const char *directory, uint32_t user)
+{
+    if (!google_drive_upload_start(game,title,directory,user)) {
+        show_message("Unable to start Google Drive backup."); return;
+    }
+    google_panel = 1;
+}
 static void google_text(const char *text, int y)
 {
     char line[61];
@@ -40,7 +47,8 @@ int google_drive_ui_frame(void)
     if (!google_panel) return 0;
     google_drive_snapshot(&status);
     if (orbisPadGetButtonPressed(ORBIS_PAD_BUTTON_CIRCLE)) {
-        if (status.busy && status.cancellable) google_drive_cancel();
+        if (status.mount_blocked) { /* Require restart after an unconfirmed unmount. */ }
+        else if (status.busy && status.cancellable) google_drive_cancel();
         else if (status.busy) { /* Let atomic credential updates finish. */ }
         else google_panel = 0;
     }
@@ -50,6 +58,10 @@ int google_drive_ui_frame(void)
     SetFontColor(APP_FONT_COLOR | 0xFF, 0);
     /* Wrap sanitized text; reserve generous width for Google's returned values. */
     google_text(status.message, 250);
+    if (status.total_bytes)
+        DrawFormatString(180, 370, "Upload: %llu / %llu bytes (%u%%)",
+            (unsigned long long)status.completed_bytes, (unsigned long long)status.total_bytes,
+            (unsigned)(100.0 * status.completed_bytes / status.total_bytes));
     if (status.discovery_details[0]) google_text(status.discovery_details, 440);
     if (status.verification_url[0]) {
         DrawString(180, 440, "Verification URL:");
@@ -58,11 +70,13 @@ int google_drive_ui_frame(void)
         google_text(status.user_code, 720);
     }
     const char *cancel_button = orbisPadGetConf()->crossButtonOK ? "Circle" : "Cross";
-    if (status.busy && !status.cancellable)
+    if (status.mount_blocked)
+        DrawString(180, 900, "Restart the app to release the failed mount.");
+    else if (status.busy && !status.cancellable)
         DrawString(180, 900, "Finishing local credential update...");
     else
         DrawFormatString(180, 900, "%s: %s", cancel_button,
-            status.busy ? "cancel operation" : "return to Settings");
+            status.busy ? "cancel operation" : "return");
     return 1;
 }
 

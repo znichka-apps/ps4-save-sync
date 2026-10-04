@@ -4,6 +4,8 @@
 #include <stdint.h>
 #define ORBIS_SAVE_DATA_BLOCKS_MIN2 96
 #define ORBIS_SAVE_DATA_MOUNT_MODE_RDWR 2
+#define ORBIS_SAVE_DATA_MOUNT_MODE_RDONLY 1
+#define ORBIS_SAVE_DATA_DIRNAME_DATA_MAXSIZE 32
 #define ORBIS_SAVE_DATA_MOUNT_MODE_CREATE2 32
 typedef struct { char data[32]; } OrbisSaveDataDirName;
 typedef struct { char data[16]; } OrbisSaveDataMountPoint;

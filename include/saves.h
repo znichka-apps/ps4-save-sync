@@ -139,6 +139,7 @@ enum cmd_code_enum
     SFO_CHANGE_ACCOUNT_ID,
     SFO_REMOVE_PSID,
     SFO_CHANGE_TITLE_ID,
+    CMD_UPLOAD_GOOGLE, /* Append to preserve existing command values. */
 };
 
 // Save flags

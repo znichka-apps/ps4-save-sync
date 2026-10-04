@@ -391,6 +391,12 @@ static void _addBackupCommands(save_entry_t* item)
 		_createOptions(cmd, _("Copy Save to USB"), CMD_COPY_SAVE_USB);
 		list_append(item->codes, cmd);
 
+		if (item->type == FILE_TYPE_PS4 && !(item->flags & (SAVE_FLAG_TROPHY|SAVE_FLAG_LOCKED)))
+		{
+			cmd = _createCmdCode(PATCH_COMMAND, CHAR_ICON_NET " ", _("Back up to Google Drive"), CMD_UPLOAD_GOOGLE);
+			list_append(item->codes, cmd);
+		}
+
 		if (apollo_config.ftp_url[0])
 		{
 			cmd = _createCmdCode(PATCH_COMMAND, CHAR_ICON_NET " ", _("Upload save backup to FTP"), CMD_UPLOAD_SAVE);

@@ -63,7 +63,10 @@ all: google-config-check $(CONTENT_ID).pkg ## Build the package.
 google-config-check:
 	@test -s include/google_build_config.h || (echo "Missing Google OAuth configuration. Run python3 tools/configure_google.py with external credentials or GDRIVE_CLIENT_ID/GDRIVE_CLIENT_SECRET." >&2; exit 1)
 
-$(INTDIR)/google_drive.o: include/google_build_config.h
+$(INTDIR)/google_drive.o: include/google_build_config.h include/google_drive.h include/google_upload.h
+$(INTDIR)/google_upload.o $(INTDIR)/google_backup.o $(INTDIR)/google_save.o: include/google_upload.h
+$(INTDIR)/google_save.o: include/save_zip.h include/saves.h
+$(INTDIR)/save_zip.o: include/save_zip.h
 
 include/google_build_config.h:
 	@echo "Missing Google OAuth configuration. Run python3 tools/configure_google.py before building." >&2
