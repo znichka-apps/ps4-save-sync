@@ -2,21 +2,20 @@
 #include <dbglogger.h>
 #define LOG dbglogger_log
 
-#define APOLLO_PATH				"/data/apollo/"
-#define APOLLO_SANDBOX_PATH		"/data/apollo/mount/%s/"
+#define APOLLO_PATH				"/data/ps4-save-sync/"
+#define APOLLO_SANDBOX_PATH		"/data/ps4-save-sync/mount/%s/"
 
 #ifdef APOLLO_ENABLE_LOGGING
-#define APOLLO_APP_PATH			"/data/apollo/debug/"
-#define APOLLO_SETTING_PATH		"/mnt/sandbox/LOAD00044_000%s/"
+#define APOLLO_APP_PATH			"/data/ps4-save-sync/debug/"
+#define APOLLO_SETTING_PATH		"/mnt/sandbox/PSSY00001_000%s/"
 #else
-#define APOLLO_APP_PATH			"/mnt/sandbox/APOL00004_000/app0/assets/"
-#define APOLLO_SETTING_PATH		"/mnt/sandbox/APOL00004_000%s/"
+#define APOLLO_APP_PATH			"/mnt/sandbox/PSSY00001_000/app0/assets/"
+#define APOLLO_SETTING_PATH		"/mnt/sandbox/PSSY00001_000%s/"
 #endif
 
 #define APOLLO_USER_PATH		APOLLO_PATH "%08x/"
 #define APOLLO_DATA_PATH		APOLLO_PATH "data/"
 #define APOLLO_LOCAL_CACHE		APOLLO_PATH "cache/"
-#define APOLLO_UPDATE_URL		"https://api.github.com/repos/bucanero/apollo-ps4/releases/latest"
 
 #define MAX_USB_DEVICES         8
 #define USB0_PATH               "/mnt/usb0/"

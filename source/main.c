@@ -698,9 +698,6 @@ s32 main(s32 argc, const char* argv[])
 #endif
 	SDL_DestroyTexture(menu_textures[buk_scr_png_index].texture);
 	
-	//Set options
-	update_callback(!apollo_config.update);
-
 	// Start BGM audio thread
 	SDL_CreateThread(&LoadSounds, "audio_thread", NULL);
 

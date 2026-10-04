@@ -82,9 +82,9 @@ The Apollo Main Menu has the following options.
 
 * This option allows you to backup, restore or rebuild your database. 
 1. Backup System Database Folder.
-* This option creates a backup of your whole database. It is saved in `/data/apollo/export/db/dbXXXX.zip`.
+* This option creates a backup of your whole database. It is saved in `/data/ps4-save-sync/export/db/dbXXXX.zip`.
 2. Restore System Database Backup. 
-* This option will allow you to restore a database backup. The backup needs to be placed in `/data/apollo/export/db/`.
+* This option will allow you to restore a database backup. The backup needs to be placed in `/data/ps4-save-sync/export/db/`.
 3. Rebuild App.db Database (Restore missing XMB items)
 * This option allows you to restore missing content on the home screen after database corruption or after rebuilding the database. 
 4. Rebuild DLC Database (addcont.db)
@@ -144,7 +144,7 @@ The Apollo Main Menu has the following options.
 
 #### Clear Local Cache
 
-* Clears any cached files that Apollo uses for browsing OnlineDB, etc. (`/data/apollo/cache/`)
+* Clears any cached files that Apollo uses for browsing OnlineDB, etc. (`/data/ps4-save-sync/cache/`)
 
 #### Update Application Data
 
@@ -152,7 +152,7 @@ The Apollo Main Menu has the following options.
 
 #### Enable Debug Log
 
-* Enables logging file location: /data/apollo/apollo.log
+* Enables logging file location: /data/ps4-save-sync/apollo.log
 
 ### About
 
@@ -252,11 +252,11 @@ Has credits, current Account-ID and console details.
 
 #### Export decrypted save files.
 
-* This option exports decrypted savedata to `/data/apollo/User-ID/Title-IDofgame-metainfo`.
+* This option exports decrypted savedata to `/data/ps4-save-sync/User-ID/Title-IDofgame-metainfo`.
 
 #### Import decrypted save files. 
 
-* This option imports decrypted savedata from `/data/apollo/User-ID/Title-IDofgame-metainfo`.
+* This option imports decrypted savedata from `/data/ps4-save-sync/User-ID/Title-IDofgame-metainfo`.
 
 #### Hex Edit save game files. 
 
@@ -266,11 +266,11 @@ Has credits, current Account-ID and console details.
 
 #### Export Keystone. 
 
-* Exports Keystone to `/data/apollo/User-ID/Title-IDofgame/keystone` from the save. 
+* Exports Keystone to `/data/ps4-save-sync/User-ID/Title-IDofgame/keystone` from the save.
 
 #### Import Keystone.
 
-* Imports Keystone from `/data/apollo/User-ID/Title-IDofgame/keystone` to the save. 
+* Imports Keystone from `/data/ps4-save-sync/User-ID/Title-IDofgame/keystone` to the save.
 
 #### Show Keystone Fingerprint. 
 
@@ -408,7 +408,7 @@ Decrypted saves are usually your own but sometimes are shared online.
 This is a fix if you want to make use of files that are for the same game but different CUSA IDs or versions (such as standard vs deluxe/GOTY editions).
 1. On the game you want the save to be applied to, make a new save.
 2. Open Apollo Save Tool, select HDD saves. Select your save and select Export decrypted save files. Export all the files one by one.
-3. Open PS4Xplorer, navigate to `/data/apollo/yourprofileid/` and simply rename the folder of the CUSA ID to the version of the game you need to have the game to.
+3. Open PS4Xplorer, navigate to `/data/ps4-save-sync/yourprofileid/` and simply rename the folder of the CUSA ID to the version of the game you need to have the game to.
 4. Back to Apollo Save Tool, select HDD saves. Select your new game title ID, select Import decrypted save files. Import them one by one. Select Apply Changes & Resign.
 5. Open your game. You should see the same name as before, but a different size or at a different point in the game.
 

@@ -55,12 +55,6 @@ menu_option_t menu_options[] = {
 		.value = &apollo_config.usb_dev,
 		.callback = usb_callback
 	},
-	{ .name = _i18n("Version Update Check"),
-		.options = NULL, 
-		.type = APP_OPTION_BOOL, 
-		.value = &apollo_config.update, 
-		.callback = update_callback 
-	},
 	{ .name = _i18n("Set User FTP Server URL"),
 		.options = NULL,
 		.type = APP_OPTION_CALL,
@@ -210,82 +204,6 @@ static void upd_appdata_callback(int sel)
 	unlink_secure(APOLLO_LOCAL_CACHE "appdata.zip");
 }
 
-void update_callback(int sel)
-{
-    apollo_config.update = !sel;
-
-    if (!apollo_config.update)
-        return;
-
-	LOG("checking latest Apollo version at %s", APOLLO_UPDATE_URL);
-
-	if (!http_download(APOLLO_UPDATE_URL, NULL, APOLLO_LOCAL_CACHE "ver.check", 0))
-	{
-		LOG("http request to %s failed", APOLLO_UPDATE_URL);
-		return;
-	}
-
-	char *buffer = readTextFile(APOLLO_LOCAL_CACHE "ver.check");
-	if (!buffer)
-		return;
-
-	LOG("received %ld bytes", strlen(buffer));
-
-	static const char find[] = "\"name\":\"Apollo Save Tool v";
-	const char* start = strstr(buffer, find);
-	if (!start)
-	{
-		LOG("no name found");
-		goto end_update;
-	}
-
-	LOG("found name");
-	start += sizeof(find) - 1;
-
-	char* end = strchr(start, '"');
-	if (!end)
-	{
-		LOG("no end of name found");
-		goto end_update;
-	}
-	*end = 0;
-	LOG("latest version is %s", start);
-
-	if (strcasecmp(APOLLO_VERSION, start) == 0)
-	{
-		LOG("no need to update");
-		goto end_update;
-	}
-
-	start = strstr(end+1, "\"browser_download_url\":\"");
-	if (!start)
-		goto end_update;
-
-	start += 24;
-	end = strchr(start, '"');
-	if (!end)
-	{
-		LOG("no download URL found");
-		goto end_update;
-	}
-
-	*end = 0;
-	LOG("download URL is %s", start);
-
-	if (show_dialog(DIALOG_TYPE_YESNO, _("New version available! Download update?")))
-	{
-		char* pkg_path = (dir_exists("/data/pkg") == SUCCESS) ? "/data/pkg/apollo-ps4.pkg" : "/data/apollo-ps4.pkg";
-		if (http_download(start, NULL, pkg_path, 1))
-			show_message(_("Update downloaded to %s"), pkg_path);
-		else
-			show_message(_("Download error!"));
-	}
-
-end_update:
-	free(buffer);
-	return;
-}
-
 static void log_callback(int sel)
 {
 	apollo_config.dbglog = !sel;
@@ -351,7 +269,7 @@ int save_app_settings(app_config_t* config)
 	snprintf(filePath, sizeof(filePath), APOLLO_SETTING_PATH "settings.bin", mountResult.mountPathName);
 	write_buffer(filePath, (uint8_t*) config, sizeof(app_config_t));
 
-	updateSaveParams(mountResult.mountPathName, "Apollo Save Tool", _("User Settings"), "www.bucanero.com.ar", 0);
+	updateSaveParams(mountResult.mountPathName, "PS4 Save Sync", _("User Settings"), "www.bucanero.com.ar", 0);
 	if (sceSaveDataUmount((void*)&mountResult.mountPathName) < 0)
 	{
 		LOG("UMOUNT ERROR");

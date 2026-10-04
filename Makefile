@@ -1,8 +1,8 @@
 # Package metadata.
-TITLE       := Apollo Save Tool
+TITLE       := PS4 Save Sync
 VERSION     := 02.32
-TITLE_ID    := APOL00004
-CONTENT_ID  := IV0000-APOL00004_00-APOLLO0000000PS4
+TITLE_ID    := PSSY00001
+CONTENT_ID  := IV0000-PSSY00001_00-PS4SAVESYNC00000
 
 # Libraries linked into the ELF.
 LIBS        := -lc -lkernel -lc++ -lSceAudioOut -lSceUserService -lScePigletv2VSH -lSceSysmodule -lSceFreeType -lSQLite \

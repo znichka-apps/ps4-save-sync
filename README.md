@@ -96,7 +96,7 @@ My GitHub projects are open to a [sponsor program](https://patreon.com/dparrino)
 
 # Setup instructions
 
-No special setup is needed. Just download the latest [`IV0000-APOL00004_00-APOLLO0000000PS4.pkg`](https://github.com/bucanero/apollo-ps4/releases/latest/download/IV0000-APOL00004_00-APOLLO0000000PS4.pkg) package and install it on your PlayStation 4.
+No special setup is needed. Build or download the `IV0000-PSSY00001_00-PS4SAVESYNC00000.pkg` package and install it on your PlayStation 4.
 On first run, the application will detect and setup the required user settings.
 
 ## Data folders

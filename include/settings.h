@@ -48,7 +48,6 @@ extern menu_option_t menu_options[];
 extern app_config_t apollo_config;
 
 void music_callback(int sel);
-void update_callback(int sel);
 
 int get_firmware_version(void);
 int save_xml_owner(const char *xmlfile);
