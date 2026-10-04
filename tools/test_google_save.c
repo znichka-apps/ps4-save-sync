@@ -8,9 +8,10 @@
 #include <zip.h>
 #include <orbis/SaveData.h>
 #include "saves.h"
+#include "settings.h"
 #include "google_upload.h"
 #include "save_zip.h"
-struct test_app_config apollo_config = {42};
+app_config_t apollo_config = {.user_id = 42};
 static int mounted, mount_calls, unmount_calls, fail_mount, fail_unmount, cancelled_, cancel_during_zip;
 static google_backup backup;
 int mkdirs(const char *path) { return mkdir(path,0700)==0 || errno==EEXIST ? 0 : -1; }

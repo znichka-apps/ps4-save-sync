@@ -10,6 +10,7 @@
 #include "common.h"
 #include "google_upload.h"
 #include "save_zip.h"
+#include "settings.h"
 int google_backup_stage(google_backup *b, int (*cancel)(void*), void *data)
 {
     if (cancel(data) || b->user != apollo_config.user_id ||
