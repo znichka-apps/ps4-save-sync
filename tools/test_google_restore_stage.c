@@ -12,6 +12,13 @@
 
 static google_backup backup;
 static int cancel_after, cancel_calls, absent_calls, target_race, imports, cleanup_failure;
+enum { SFO_OK, SFO_SHORT, SFO_MAGIC, SFO_VERSION, SFO_COUNT, SFO_TABLE, SFO_KEY_OFFSET, SFO_INDEX_OFFSET,
+    SFO_AGGREGATE, SFO_LONG_KEY, SFO_DUPLICATE,
+    SFO_STRING_END, SFO_TITLE_MISMATCH, SFO_DIRECTORY_MISMATCH, SFO_BLOCKS_LOW, SFO_BLOCKS_HIGH,
+    SFO_TITLE_FORMAT, SFO_BLOCKS_FORMAT, SFO_ACCOUNT_SIZE, SFO_PARAMS_SIZE, SFO_PARAMS_TITLE,
+    SFO_DETAIL_FORMAT, SFO_LIST_FORMAT, SFO_MISSING_LIST_PARAM,
+    SFO_BLOCKS_MAX_VALID };
+static int sfo_case;
 static int cancelled(void *p);
 static void put32(unsigned char *p,unsigned v) { for(unsigned i=0;i<4;i++) p[i]=(v>>(8*i))&255; }
 static void put16(unsigned char *p,unsigned v) { p[0]=v&255; p[1]=v>>8; }
@@ -32,6 +39,33 @@ static void make_sfo(void) {
         v+=len;
     }
     sfo_size=dataoff+v;
+    switch(sfo_case) {
+        case SFO_SHORT: sfo_size=19; break;
+        case SFO_MAGIC: put32(sfo,0); break;
+        case SFO_VERSION: put32(sfo+4,0x102); break;
+        case SFO_COUNT: put32(sfo+16,0); break;
+        case SFO_TABLE: put32(sfo+8,0xfffffff0); break;
+        case SFO_KEY_OFFSET: put16(sfo+20,0xffff); break;
+        case SFO_INDEX_OFFSET: put32(sfo+20+12,0xfffffff0); break;
+        case SFO_AGGREGATE: put32(sfo+20+8,11); break;
+        case SFO_LONG_KEY: memset(sfo+keyoff+strlen("TITLE_ID")+1+strlen("SAVEDATA_DIRECTORY")+1+strlen("SAVEDATA_BLOCKS")+1+strlen("ACCOUNT_ID")+1+strlen("PARAMS")+1, 'A', 64); break;
+        case SFO_DUPLICATE: put16(sfo+20+16,0); break;
+        case SFO_STRING_END: sfo[dataoff+strlen("CUSA12345")]='X'; break;
+        case SFO_TITLE_MISMATCH: strcpy((char*)sfo+dataoff,"CUSA99999"); break;
+        case SFO_TITLE_FORMAT: put16(sfo+20+2,0x404); break;
+        case SFO_DIRECTORY_MISMATCH: strcpy((char*)sfo+dataoff+10,"MINE"); break;
+        case SFO_BLOCKS_LOW: put32(sfo+dataoff+15,95); break;
+        case SFO_BLOCKS_HIGH: put32(sfo+dataoff+15,524289); break;
+        case SFO_BLOCKS_FORMAT: put16(sfo+20+2*16+2,0x204); break;
+        case SFO_ACCOUNT_SIZE: put32(sfo+20+3*16+4,7); put32(sfo+20+3*16+8,7); break;
+        case SFO_PARAMS_SIZE: put32(sfo+20+4*16+4,0x53); put32(sfo+20+4*16+8,0x53); break;
+        case SFO_PARAMS_TITLE: strcpy((char*)sfo+dataoff+27+0x2c,"CUSA99999"); break;
+        case SFO_DETAIL_FORMAT: put16(sfo+20+7*16+2,0x404); break;
+        case SFO_LIST_FORMAT: put16(sfo+20+8*16+2,0x204); break;
+        case SFO_MISSING_LIST_PARAM: sfo[keyoff+strlen("TITLE_ID")+1+strlen("SAVEDATA_DIRECTORY")+1+strlen("SAVEDATA_BLOCKS")+1+strlen("ACCOUNT_ID")+1+strlen("PARAMS")+1+strlen("MAINTITLE")+1+strlen("SUBTITLE")+1+strlen("DETAIL")+1]='X'; break;
+        case SFO_BLOCKS_MAX_VALID: put32(sfo+dataoff+15,524288); break;
+        default: break;
+    }
 }
 static void add(zip_t *z,const char *name,const void *data,size_t size,unsigned mode) {
     zip_source_t *s=zip_source_buffer(z,data,size,0);assert(s);zip_int64_t i=zip_file_add(z,name,s,0);assert(i>=0);
@@ -75,6 +109,7 @@ static void clear_tree(const char *p) {
 }
 static void reset(void) {
     cancel_after=cancel_calls=absent_calls=target_race=imports=cleanup_failure=0;
+    sfo_case=SFO_OK;
     clear_tree(backup.temp_dir);strcpy(backup.temp_dir,GOOGLE_BACKUP_CACHE "drive-XXXXXX");assert(mkdtemp(backup.temp_dir));
     snprintf(backup.archive,sizeof(backup.archive),"%s/backup.zip",backup.temp_dir);
     strcpy(backup.title,"CUSA12345");strcpy(backup.directory,"SAVE");backup.user=42;
@@ -93,6 +128,50 @@ int main(void) {
     assert(first==GOOGLE_UPLOAD_SUCCESS);
     assert(imports==1&&absent_calls==2&&access(backup.archive,F_OK)==0);
     assert(access("build/host/cache/no-such-stage",F_OK));
+
+    /* A max-sized but supported allocation is accepted. The following cases
+       each pin one fixed, content-free diagnostic check and SFO field. */
+    reset();sfo_case=SFO_BLOCKS_MAX_VALID;fixture(NULL,0100000,1);
+    assert(google_restore_run(&backup,&io)==GOOGLE_UPLOAD_SUCCESS&&imports==1);
+    struct { int kind; const char *check,*field; } bad_sfo[]={
+        {SFO_SHORT,"header too short","SFO header"},
+        {SFO_MAGIC,"invalid magic","SFO header"},
+        {SFO_VERSION,"unsupported version","SFO header"},
+        {SFO_COUNT,"invalid key/value table offsets or entry count","SFO header"},
+        {SFO_TABLE,"invalid key/value table offsets or entry count","SFO header"},
+        {SFO_KEY_OFFSET,"invalid or unterminated key offset","index entry 0"},
+        {SFO_INDEX_OFFSET,"invalid value length or offset","TITLE_ID"},
+        {SFO_AGGREGATE,"aggregate value lengths exceed data table","SAVEDATA_LIST_PARAM"},
+        {SFO_LONG_KEY,"key exceeds 63 bytes","unrecognized field"},
+        {SFO_DUPLICATE,"duplicate key","TITLE_ID"},
+        {SFO_STRING_END,"unterminated string value","TITLE_ID"},
+        {SFO_TITLE_MISMATCH,"does not match selected backup","TITLE_ID"},
+        {SFO_TITLE_FORMAT,"expected string format","TITLE_ID"},
+        {SFO_DIRECTORY_MISMATCH,"does not match selected backup","SAVEDATA_DIRECTORY"},
+        {SFO_BLOCKS_LOW,"block count outside supported range","SAVEDATA_BLOCKS"},
+        {SFO_BLOCKS_HIGH,"block count outside supported range","SAVEDATA_BLOCKS"},
+        {SFO_BLOCKS_FORMAT,"expected 4-byte integer","SAVEDATA_BLOCKS"},
+        {SFO_ACCOUNT_SIZE,"expected 8-byte value","ACCOUNT_ID"},
+        {SFO_PARAMS_SIZE,"value shorter than title identity structure","PARAMS"},
+        {SFO_PARAMS_TITLE,"embedded title ID does not match selected backup","PARAMS"},
+        {SFO_DETAIL_FORMAT,"expected string format","DETAIL"},
+        {SFO_LIST_FORMAT,"expected 4-byte integer","SAVEDATA_LIST_PARAM"},
+        {SFO_MISSING_LIST_PARAM,"required field missing","SAVEDATA_LIST_PARAM"}
+    };
+    for(unsigned i=0;i<sizeof(bad_sfo)/sizeof(bad_sfo[0]);i++) {
+        reset();sfo_case=bad_sfo[i].kind;fixture(NULL,0100000,1);
+        assert(google_restore_run(&backup,&io)==GOOGLE_UPLOAD_FAILED);
+        assert(strstr(backup.diagnostic,"Google restore failed [op=7 errno=22 zip=0]")&&
+            strstr(backup.diagnostic,bad_sfo[i].check)&&strstr(backup.diagnostic,"Download retained"));
+        char expected_field[80];snprintf(expected_field,sizeof(expected_field),"field=%s",bad_sfo[i].field);
+        assert(strstr(backup.diagnostic,expected_field));
+        assert(access(backup.archive,F_OK)==0&&!imports&&!absent_calls);
+    }
+    reset();fixture(NULL,0100000,0);
+    assert(google_restore_run(&backup,&io)==GOOGLE_UPLOAD_FAILED);
+    assert(strstr(backup.diagnostic,"Google restore failed [op=4")&&
+        strstr(backup.diagnostic,"Download retained"));
+    assert(access(backup.archive,F_OK)==0&&!imports&&!absent_calls);
 
     const char *bad[]={"OTHER/root.bin","SAVE/../escape","/absolute","SAVE/link\\escape"};
     for(unsigned i=0;i<sizeof(bad)/sizeof(bad[0]);i++){

@@ -51,62 +51,109 @@ static int hash_fd(int fd, const google_backup *b, const google_restore_io *io, 
 
 static unsigned le16(const unsigned char *p) { return p[0] | (unsigned)p[1]<<8; }
 static uint32_t le32(const unsigned char *p) { return le16(p) | (uint32_t)le16(p+2)<<16; }
-/* Bound every index before Apollo's SFO parser/patcher sees these bytes. */
-static int sfo_check(const unsigned char *p, size_t n, const google_backup *b, uint32_t *blocks)
+static void sfo_failure(char *out, size_t cap, const char *check, const char *field)
 {
-    if (n<20 || le32(p)!=0x46535000 || le32(p+4)!=0x101) return 0;
+    if (out && cap) snprintf(out,cap,"SFO check=%s field=%s",check,field);
+}
+static const char *sfo_field(const char *key)
+{
+    static const char *known[]={"TITLE_ID","SAVEDATA_DIRECTORY","SAVEDATA_BLOCKS","ACCOUNT_ID",
+        "PARAMS","MAINTITLE","SUBTITLE","DETAIL","SAVEDATA_LIST_PARAM"};
+    for (unsigned i=0;i<sizeof(known)/sizeof(known[0]);i++) if (!strcmp(key,known[i])) return known[i];
+    return "unrecognized field";
+}
+/* Bound every index before Apollo's SFO parser/patcher sees these bytes. */
+static int sfo_check(const unsigned char *p, size_t n, const google_backup *b, uint32_t *blocks,
+    char *failure, size_t failure_cap)
+{
+    if (n<20) { sfo_failure(failure,failure_cap,"header too short","SFO header"); return 0; }
+    if (le32(p)!=0x46535000) { sfo_failure(failure,failure_cap,"invalid magic","SFO header"); return 0; }
+    if (le32(p+4)!=0x101) { sfo_failure(failure,failure_cap,"unsupported version","SFO header"); return 0; }
     unsigned keys=le32(p+8), values=le32(p+12), count=le32(p+16), found=0, allocated=0;
-    if (!count || count>256 || keys<20+count*16 || keys>=values || values>n) return 0;
+    if (!count || count>256 || keys<20+count*16 || keys>=values || values>n) {
+        sfo_failure(failure,failure_cap,"invalid key/value table offsets or entry count","SFO header"); return 0;
+    }
     for (unsigned i=0;i<count;i++) {
         const unsigned char *e=p+20+i*16;
         unsigned k=le16(e), format=le16(e+2), len=le32(e+4), max=le32(e+8), off=le32(e+12);
-        if (k>=values-keys || !memchr(p+keys+k,0,values-keys-k) || !max || len>max ||
-            off>n-values || max>n-values-off) return 0;
-        const char *key=(const char*)p+keys+k; const unsigned char *v=p+values+off;
-        if (strlen(key)>63 || max>n-values-allocated) return 0;
+        char indexed_field[48]; snprintf(indexed_field,sizeof(indexed_field),"index entry %u",i);
+        if (k>=values-keys || !memchr(p+keys+k,0,values-keys-k)) {
+            sfo_failure(failure,failure_cap,"invalid or unterminated key offset",indexed_field); return 0;
+        }
+        const char *key=(const char*)p+keys+k;
+        const char *field=sfo_field(key);
+        if (!max || len>max || off>n-values || max>n-values-off) {
+            sfo_failure(failure,failure_cap,"invalid value length or offset",field); return 0;
+        }
+        if (strlen(key)>63) { sfo_failure(failure,failure_cap,"key exceeds 63 bytes",field); return 0; }
+        if (allocated>n-values || max>n-values-allocated) {
+            sfo_failure(failure,failure_cap,"aggregate value lengths exceed data table",field); return 0;
+        }
         allocated+=max;
+        const unsigned char *v=p+values+off;
         for (unsigned j=0;j<i;j++) {
             const unsigned char *prev=p+20+j*16;
-            if (!strcmp(key,(const char*)p+keys+le16(prev))) return 0;
+            if (!strcmp(key,(const char*)p+keys+le16(prev))) {
+                sfo_failure(failure,failure_cap,"duplicate key",field); return 0;
+            }
         }
-        if (format==0x204 && (!len || !memchr(v,0,len))) return 0;
+        if (format==0x204 && (!len || !memchr(v,0,len))) {
+            sfo_failure(failure,failure_cap,"unterminated string value",field); return 0;
+        }
         if (!strcmp(key,"TITLE_ID") || !strcmp(key,"SAVEDATA_DIRECTORY")) {
             const char *expected=!strcmp(key,"TITLE_ID")?b->title:b->directory;
-            if (format!=0x204 || len<strlen(expected)+1 || strcmp((const char*)v,expected)) return 0;
+            if (format!=0x204) { sfo_failure(failure,failure_cap,"expected string format",field); return 0; }
+            if (len<strlen(expected)+1 || strcmp((const char*)v,expected)) {
+                sfo_failure(failure,failure_cap,"does not match selected backup",field); return 0;
+            }
             found|=!strcmp(key,"TITLE_ID")?1:2;
         } else if (!strcmp(key,"SAVEDATA_BLOCKS")) {
-            if (format!=0x404 || len!=4 || max!=4) return 0;
+            if (format!=0x404 || len!=4 || max!=4) { sfo_failure(failure,failure_cap,"expected 4-byte integer",field); return 0; }
             *blocks=le32(v);
             /* PS4 save blocks are 32 KiB. Bound untrusted allocation requests. */
-            if (*blocks<96 || *blocks>524288) return 0;
+            if (*blocks<96 || *blocks>524288) { sfo_failure(failure,failure_cap,"block count outside supported range",field); return 0; }
             found|=4;
         } else if (!strcmp(key,"ACCOUNT_ID")) {
-            if (len!=8 || max!=8) return 0;
+            if (len!=8 || max!=8) { sfo_failure(failure,failure_cap,"expected 8-byte value",field); return 0; }
             found|=8;
         } else if (!strcmp(key,"PARAMS")) {
-            if (len<0x54 || max<0x54) return 0;
-            if (!memchr(v+0x2c,0,16) || strcmp((const char*)v+0x2c,b->title)) return 0;
+            if (len<0x54 || max<0x54) { sfo_failure(failure,failure_cap,"value shorter than title identity structure",field); return 0; }
+            if (!memchr(v+0x2c,0,16) || strcmp((const char*)v+0x2c,b->title)) {
+                sfo_failure(failure,failure_cap,"embedded title ID does not match selected backup",field); return 0;
+            }
             found|=16;
         } else if (!strcmp(key,"MAINTITLE") || !strcmp(key,"SUBTITLE") || !strcmp(key,"DETAIL")) {
-            if (format!=0x204) return 0;
+            if (format!=0x204) { sfo_failure(failure,failure_cap,"expected string format",field); return 0; }
             found|=!strcmp(key,"MAINTITLE")?32:!strcmp(key,"SUBTITLE")?64:128;
         } else if (!strcmp(key,"SAVEDATA_LIST_PARAM")) {
-            if (len!=4 || max!=4 || format!=0x404) return 0;
+            if (len!=4 || max!=4 || format!=0x404) { sfo_failure(failure,failure_cap,"expected 4-byte integer",field); return 0; }
             found|=256;
         }
     }
-    return found==511;
+    if (found!=511) {
+        static const struct { unsigned bit; const char *name; } required[]={
+            {1,"TITLE_ID"},{2,"SAVEDATA_DIRECTORY"},{4,"SAVEDATA_BLOCKS"},{8,"ACCOUNT_ID"},
+            {16,"PARAMS"},{32,"MAINTITLE"},{64,"SUBTITLE"},{128,"DETAIL"},{256,"SAVEDATA_LIST_PARAM"}};
+        for (unsigned i=0;i<sizeof(required)/sizeof(required[0]);i++) if (!(found&required[i].bit)) {
+            sfo_failure(failure,failure_cap,"required field missing",required[i].name); return 0;
+        }
+    }
+    return 1;
 }
-static int read_sfo(zip_t *z, const google_backup *b, uint32_t *blocks)
+static int read_sfo(zip_t *z, const google_backup *b, uint32_t *blocks, char *failure, size_t failure_cap)
 {
     char name[128]; snprintf(name,sizeof(name),"%s/sce_sys/param.sfo",b->directory);
     zip_stat_t st;
-    if (zip_stat(z,name,0,&st) || !st.size || st.size>1024*1024) return 0;
-    unsigned char *p=malloc(st.size); if (!p) return 0;
+    if (zip_stat(z,name,0,&st)) { sfo_failure(failure,failure_cap,"ZIP stat failed","param.sfo"); return 0; }
+    if (!st.size || st.size>1024*1024) { sfo_failure(failure,failure_cap,"entry size outside 1..1048576 bytes","param.sfo"); return 0; }
+    unsigned char *p=malloc(st.size); if (!p) { sfo_failure(failure,failure_cap,"allocation failed","param.sfo"); return 0; }
     zip_file_t *f=zip_fopen(z,name,0); int ok=0;
+    if (!f) sfo_failure(failure,failure_cap,"ZIP entry open failed","param.sfo");
     if (f) {
-        ok=zip_fread(f,p,st.size)==(zip_int64_t)st.size && sfo_check(p,st.size,b,blocks);
-        if (zip_fclose(f)) ok=0;
+        zip_int64_t bytes=zip_fread(f,p,st.size);
+        if (bytes!=(zip_int64_t)st.size) sfo_failure(failure,failure_cap,"ZIP entry read failed or was truncated","param.sfo");
+        else ok=sfo_check(p,st.size,b,blocks,failure,failure_cap);
+        if (zip_fclose(f)) { ok=0; sfo_failure(failure,failure_cap,"ZIP entry close/CRC check failed","param.sfo"); }
     }
     free(p); return ok;
 }
@@ -260,7 +307,13 @@ int google_restore_run(google_backup *b, const google_restore_io *io)
     z=zip_fdopen(zipfd,ZIP_RDONLY|ZIP_CHECKCONS,&zip_error);
     if (!z) { close(zipfd); goto fail; }
     op=7; errno=0;
-    if (!read_sfo(z,b,&blocks)) { errno=EINVAL; goto fail; }
+    char sfo_diagnostic[160]={0};
+    if (!read_sfo(z,b,&blocks,sfo_diagnostic,sizeof(sfo_diagnostic))) {
+        errno=EINVAL;
+        snprintf(b->diagnostic,sizeof(b->diagnostic),"Google restore failed [op=7 errno=%d zip=%d]: %.96s. Download retained.",errno,zip_error,
+            sfo_diagnostic[0]?sfo_diagnostic:"SFO validation failed [field=param.sfo]");
+        goto fail;
+    }
     if (io->cancelled(io->data)) { result=GOOGLE_UPLOAD_CANCELLED; goto done; }
     op=8;
     if (io->absent(io->data,b)!=1) { errno=EEXIST; goto fail; }
