@@ -73,6 +73,7 @@ $(INTDIR)/google_download.o $(INTDIR)/google_drive.o $(INTDIR)/menu_options.o $(
 $(INTDIR)/google_download.o: include/google_upload.h
 $(INTDIR)/google_restore.o $(INTDIR)/google_restore_ps4.o $(INTDIR)/google_drive.o: include/google_restore.h
 $(INTDIR)/google_restore_ps4.o $(INTDIR)/save_target.o: include/saves.h include/settings.h
+$(INTDIR)/restore_fs.o $(INTDIR)/google_restore.o $(INTDIR)/save_target.o: include/restore_fs.h
 $(INTDIR)/sd.o $(INTDIR)/saves.o: include/sd.h
 
 include/google_build_config.h:

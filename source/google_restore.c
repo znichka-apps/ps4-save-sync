@@ -8,7 +8,39 @@
 #include <ctype.h>
 #include <sys/stat.h>
 #include <zip.h>
+#include <mbedtls/md.h>
 #include "google_restore.h"
+#include "restore_fs.h"
+
+/* Stable descriptor metadata, including sub-second mutations. */
+static int same(const struct stat *a, const struct stat *b)
+{
+    return a->st_dev==b->st_dev && a->st_ino==b->st_ino && a->st_mode==b->st_mode &&
+        a->st_uid==b->st_uid && a->st_size==b->st_size &&
+        a->st_mtim.tv_sec==b->st_mtim.tv_sec && a->st_mtim.tv_nsec==b->st_mtim.tv_nsec &&
+        a->st_ctim.tv_sec==b->st_ctim.tv_sec && a->st_ctim.tv_nsec==b->st_ctim.tv_nsec;
+}
+static int hash_fd(int fd, const google_backup *b, const google_restore_io *io, int *code)
+{
+    unsigned char buffer[16384], digest[16]; char hex[33]; uint64_t size=0;
+    mbedtls_md_context_t md; mbedtls_md_init(&md);
+    *code=mbedtls_md_setup(&md,mbedtls_md_info_from_type(MBEDTLS_MD_MD5),0);
+    if (!*code) *code=mbedtls_md_starts(&md);
+    int ok=!*code && lseek(fd,0,SEEK_SET)==0;
+    while (ok) {
+        ssize_t n=read(fd,buffer,sizeof(buffer));
+        if (n<0 && errno==EINTR) continue;
+        if (n<0 || io->cancelled(io->data)) { ok=0; break; }
+        if (!n) break;
+        if ((uint64_t)n>b->size-size) { ok=0; break; }
+        size+=n; *code=mbedtls_md_update(&md,buffer,n); if (*code) ok=0;
+    }
+    if (ok) { *code=mbedtls_md_finish(&md,digest); if (*code) ok=0; }
+    mbedtls_md_free(&md);
+    if (!ok || size!=b->size) return 0;
+    for (unsigned i=0;i<16;i++) snprintf(hex+i*2,3,"%02x",digest[i]);
+    return !strcmp(hex,b->md5);
+}
 
 static unsigned le16(const unsigned char *p) { return p[0] | (unsigned)p[1]<<8; }
 static uint32_t le32(const unsigned char *p) { return le16(p) | (uint32_t)le16(p+2)<<16; }
@@ -72,18 +104,24 @@ static int read_sfo(zip_t *z, const google_backup *b, uint32_t *blocks)
     free(p); return ok;
 }
 /* Walk under the mount with directory descriptors; never follow symlinks. */
-static int destination(int root, const char *name, int directory)
+static int fs_failure(google_backup *b, int operation, const char *name, int error)
+{
+    if (!b->diagnostic[0]) snprintf(b->diagnostic,sizeof(b->diagnostic),
+        "Restore %s failed [op=%d errno=%d]. Partial target retained.",name,operation,error);
+    return -1;
+}
+static int destination(int root, const char *name, int directory, google_backup *b)
 {
     char path[1024]; if (!*name || strlen(name)>=sizeof(path)) return -1;
-    strcpy(path,name); int parent=dup(root); if (parent<0) return -1;
+    strcpy(path,name); int parent=dup(root); if (parent<0) return fs_failure(b,101,"dup directory",errno);
     char *part=path;
     while (*part) {
         char *slash=strchr(part,'/'); if (slash) *slash=0;
         if (!*part || !strcmp(part,".") || !strcmp(part,"..") || strchr(part,'\\') || strchr(part,':')) break;
         if (slash || directory) {
-            if (mkdirat(parent,part,0700) && errno!=EEXIST) break;
+            if (restore_fs_mkdirat(parent,part,0700) && errno!=EEXIST) { fs_failure(b,102,"mkdirat",errno); break; }
             int next=openat(parent,part,O_RDONLY|O_DIRECTORY|O_NOFOLLOW);
-            if (next<0) break;
+            if (next<0) { fs_failure(b,103,"openat directory (no-follow)",errno); break; }
             if (close(parent)) { close(next); return -1; }
             parent=next;
             if (!slash || !slash[1]) return parent;
@@ -91,19 +129,27 @@ static int destination(int root, const char *name, int directory)
         } else {
             int fd=openat(parent,part,O_WRONLY|O_CREAT|O_NOFOLLOW|O_NONBLOCK,0600);
             struct stat st;
-            if (fd>=0 && (fstat(fd,&st) || !S_ISREG(st.st_mode) || ftruncate(fd,0))) { close(fd); fd=-1; }
+            if (fd<0) fs_failure(b,104,"openat file (no-follow)",errno);
+            if (fd>=0) {
+                int error=0, operation=105;
+                if (fstat(fd,&st)) error=errno;
+                else if (!S_ISREG(st.st_mode) || st.st_nlink!=1) error=EINVAL;
+                else if (ftruncate(fd,0)) { error=errno; operation=106; }
+                if (error) { fs_failure(b,operation,operation==106?"ftruncate":"fstat/type/link check",error); close(fd); fd=-1; }
+            }
             if (close(parent)) { if (fd>=0) close(fd); return -1; }
             return fd;
         }
     }
     close(parent); return -1;
 }
-static int copy_entries(zip_t *z, const google_backup *b, const char *mount, const google_restore_io *io)
+static int copy_entries(zip_t *z, google_backup *b, const char *mount, const google_restore_io *io)
 {
     char path[256]; if (strlen(mount)>=sizeof(path)) return 0;
     strcpy(path,mount); size_t len=strlen(path);
     while (len>1 && path[len-1]=='/') path[--len]=0;
-    int root=open(path,O_RDONLY|O_DIRECTORY|O_NOFOLLOW); if (root<0) return 0;
+    int root=open(path,O_RDONLY|O_DIRECTORY|O_NOFOLLOW);
+    if (root<0) { fs_failure(b,100,"open mount (no-follow)",errno); return 0; }
     int ok=1; size_t prefix=strlen(b->directory)+1;
     zip_int64_t count=zip_get_num_entries(z,0);
     for (zip_uint64_t i=0;ok && i<(zip_uint64_t)count;i++) {
@@ -112,7 +158,7 @@ static int copy_entries(zip_t *z, const google_backup *b, const char *mount, con
         if (!st.name || strlen(st.name)<prefix || strncmp(st.name,b->directory,prefix-1) || st.name[prefix-1]!='/') { ok=0; break; }
         const char *name=st.name+prefix; if (!*name) continue;
         int dir=name[strlen(name)-1]=='/';
-        int fd=destination(root,name,dir); if (fd<0) { ok=0; break; }
+        int fd=destination(root,name,dir,b); if (fd<0) { ok=0; break; }
         if (!dir) {
             zip_file_t *f=zip_fopen_index(z,i,0); uint64_t total=0;
             unsigned char buffer[16384]; zip_int64_t n=0;
@@ -123,26 +169,28 @@ static int copy_entries(zip_t *z, const google_backup *b, const char *mount, con
                 while (written<(size_t)n) {
                     ssize_t w=write(fd,buffer+written,n-written);
                     if (w<0 && errno==EINTR) continue;
-                    if (w<=0) { ok=0; break; }
+                    if (w<=0) { fs_failure(b,107,"write",w<0?errno:EIO); ok=0; break; }
                     written+=w;
                 }
                 total+=written;
             }
             if (n<0 || total!=st.size) ok=0;
             if (f && zip_fclose(f)) ok=0;
-            if (fsync(fd)) ok=0;
+            if (fsync(fd)) { fs_failure(b,108,"fsync",errno); ok=0; }
         }
-        if (close(fd)) ok=0;
+        if (close(fd)) { fs_failure(b,109,"close entry",errno); ok=0; }
     }
-    if (close(root)) ok=0;
+    if (close(root)) { fs_failure(b,110,"close mount",errno); ok=0; }
     return ok;
 }
 int google_restore_run(google_backup *b, const google_restore_io *io)
 {
-    int result=GOOGLE_UPLOAD_FAILED, mounted=0, fd=-1; zip_t *z=NULL;
-    uint32_t blocks=0; char mount[256], expected[288]; struct stat before, after;
+    int result=GOOGLE_UPLOAD_FAILED, mounted=0, fd=-1, private_fd=-1, op=1, native=0, zip_error=0; zip_t *z=NULL;
+    uint32_t blocks=0; char mount[256], expected[288]; struct stat before, after, private_stat;
     b->diagnostic[0]=0;
-#define FAIL(s) do { snprintf(b->diagnostic,sizeof(b->diagnostic),"%s",s); goto done; } while (0)
+#define FAIL(s) do { int e=errno; snprintf(b->diagnostic,sizeof(b->diagnostic),"%s [op=%d errno=%d native=%d zip=%d]",s,op,e,native,zip_error); goto done; } while (0)
+    errno=0;
+    if (!restore_fs_init(&native)) FAIL("Restore filesystem initialization failed; no save written.");
     if (strlen(b->title)!=9 || strncmp(b->title,"CUSA",4) || !*b->directory || strlen(b->directory)>=32 ||
         !strcmp(b->directory,".") || !strcmp(b->directory,"..")) FAIL("Unsupported title/save directory; no save written.");
     for (unsigned i=4;i<9;i++) if (!isdigit((unsigned char)b->title[i])) FAIL("Invalid title ID.");
@@ -153,35 +201,52 @@ int google_restore_run(google_backup *b, const google_restore_io *io)
         strchr(b->temp_dir+strlen(GOOGLE_BACKUP_CACHE),'/')) FAIL("Invalid private archive path.");
     snprintf(expected,sizeof(expected),"%s/backup.zip",b->temp_dir);
     if (strcmp(expected,b->archive)) FAIL("Invalid private archive path.");
-    if (lstat(b->temp_dir,&after) || !S_ISDIR(after.st_mode)) FAIL("Invalid private archive directory.");
-    fd=open(b->archive,O_RDONLY|O_NOFOLLOW);
-    if (fd<0 || fstat(fd,&before) || !S_ISREG(before.st_mode)) FAIL("Archive unavailable.");
-    google_backup hash=*b;
-    if (!google_backup_hash(&hash,io->cancelled,io->data) || hash.size!=b->size || strcmp(hash.md5,b->md5) ||
-        !google_download_zip(b,io->cancelled,io->data)) FAIL("Archive revalidation failed; no save written.");
-    if (lstat(b->archive,&after) || before.st_dev!=after.st_dev || before.st_ino!=after.st_ino ||
-        before.st_size!=after.st_size || before.st_mtime!=after.st_mtime) FAIL("Archive changed; no save written.");
-    int error; int zipfd=dup(fd);
+    op=2; errno=0;
+    private_fd=open(b->temp_dir,O_RDONLY|O_DIRECTORY|O_NOFOLLOW);
+    if (private_fd<0 || fstat(private_fd,&private_stat) || !S_ISDIR(private_stat.st_mode) ||
+        (private_stat.st_mode&077) || private_stat.st_uid!=geteuid()) FAIL("Invalid private archive directory.");
+    op=3; errno=0;
+    fd=openat(private_fd,"backup.zip",O_RDONLY|O_NOFOLLOW|O_NONBLOCK);
+    if (fd<0 || fstat(fd,&before) || !S_ISREG(before.st_mode) || before.st_uid!=private_stat.st_uid ||
+        before.st_nlink!=1) FAIL("Archive unavailable.");
+    op=4; errno=0;
+    if (!hash_fd(fd,b,io,&native) || !google_download_zip_fd(b,fd,io->cancelled,io->data,&zip_error))
+        FAIL("Archive revalidation failed; no save written.");
+    op=5; errno=0;
+    if (fstat(fd,&after) || !same(&before,&after) || restore_fs_lstat(b->archive,&after) ||
+        !same(&before,&after) || restore_fs_lstat(b->temp_dir,&after) ||
+        private_stat.st_dev!=after.st_dev || private_stat.st_ino!=after.st_ino ||
+        private_stat.st_mode!=after.st_mode || private_stat.st_uid!=after.st_uid ||
+        !S_ISDIR(after.st_mode)) FAIL("Archive changed; no save written.");
+    op=6; errno=0; int zipfd=dup(fd);
     if (zipfd<0) FAIL("Archive unavailable.");
-    z=zip_fdopen(zipfd,ZIP_RDONLY|ZIP_CHECKCONS,&error);
-    if (!z) { close(zipfd); FAIL("Archive unavailable."); }
+    z=zip_fdopen(zipfd,ZIP_RDONLY|ZIP_CHECKCONS,&zip_error);
+    if (!z) { int saved=errno; close(zipfd); errno=saved; FAIL("Archive unavailable."); }
+    op=7; errno=0;
     if (!read_sfo(z,b,&blocks)) FAIL("SFO invalid or disagrees with selected title/save directory; no save written.");
     if (io->cancelled(io->data)) goto done;
-    int absent=io->absent(io->data,b);
+    op=8; errno=0; int absent=io->absent(io->data,b);
     if (absent!=1) FAIL(absent==0?"Save already exists for this PS4 user. Restore refused; never overwritten.":"Cannot confirm empty target; restore refused.");
     if (io->cancelled(io->data)) goto done;
+    op=9; errno=0;
     if (!io->create_mount(io->data,b,blocks,mount,sizeof(mount))) FAIL("Create/mount failed. A partial target may remain; inspect it manually.");
     mounted=1;
-    if (!copy_entries(z,b,mount,io)) FAIL("Copy failed or cancelled. Partial target retained for manual review.");
+    op=10; errno=0;
+    if (!copy_entries(z,b,mount,io)) {
+        if (!b->diagnostic[0]) FAIL("Copy failed or cancelled. Partial target retained for manual review.");
+        goto done;
+    }
     if (io->cancelled(io->data)) goto done;
+    op=11; errno=0;
     if (!io->ownership(io->data,mount)) FAIL("Ownership patch failed. Partial target retained for manual review.");
     if (io->cancelled(io->data)) goto done;
+    op=12; errno=0;
     if (!io->details(io->data,b,mount)) FAIL("Save metadata update failed. Partial target retained for manual review.");
     result=GOOGLE_UPLOAD_SUCCESS;
 done:
     if (mounted && !io->unmount(io->data)) {
         b->mount_blocked=1; result=GOOGLE_UPLOAD_FAILED;
-        snprintf(b->diagnostic,sizeof(b->diagnostic),"Unmount failed. Restart the app; target retained. Restore NOT successful.");
+        snprintf(b->diagnostic,sizeof(b->diagnostic),"Unmount failed [op=13 errno=%d]. Restart the app; target retained. Restore NOT successful.",errno);
     }
     if (!b->mount_blocked && io->cancelled(io->data)) {
         result=GOOGLE_UPLOAD_CANCELLED;
@@ -192,7 +257,8 @@ done:
         snprintf(b->diagnostic,sizeof(b->diagnostic),"Restore cancelled at completion. Target retained; inspect manually.");
     }
     if (z) zip_discard(z);
-    if (fd>=0 && close(fd)) { result=GOOGLE_UPLOAD_FAILED; snprintf(b->diagnostic,sizeof(b->diagnostic),"Archive close failed; target retained."); }
+    if (private_fd>=0 && close(private_fd)) { result=GOOGLE_UPLOAD_FAILED; snprintf(b->diagnostic,sizeof(b->diagnostic),"Private directory close failed [op=15 errno=%d]",errno); }
+    if (fd>=0 && close(fd)) { result=GOOGLE_UPLOAD_FAILED; snprintf(b->diagnostic,sizeof(b->diagnostic),"Archive close failed [op=14 errno=%d]; target retained.",errno); }
     return result;
 #undef FAIL
 }

@@ -3,6 +3,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <ctype.h>
+#include <errno.h>
 #include <unistd.h>
 #include <sys/stat.h>
 #include <zip.h>
@@ -136,8 +137,7 @@ static unsigned u16(const unsigned char *p) { return p[0] | (unsigned)p[1]<<8; }
 static uint64_t u32(const unsigned char *p) { return u16(p) | (uint64_t)u16(p+2)<<16; }
 /* Check raw central/local names as well: C string APIs can hide embedded NULs.
    This v1 reader deliberately rejects ZIP64, multi-disk and trailing data. */
-static int raw_names(const google_backup *b, int (*cancel)(void*), void *data) {
-    FILE *f=fopen(b->archive,"rb"); if (!f) return 0;
+static int raw_names(FILE *f, int (*cancel)(void*), void *data) {
     unsigned char tail[65557], header[46], local[30], name[1024], local_name[1024];
     int ok=0;
     if (fseeko(f,0,SEEK_END)) goto done;
@@ -168,12 +168,10 @@ static int raw_names(const google_backup *b, int (*cancel)(void*), void *data) {
         position+=46+n+extra+comment;
     }
     ok=position==offset+central;
-done: if (fclose(f)) ok=0; return ok;
+done: return ok;
 }
-int google_download_zip(const google_backup *b, int (*cancel)(void*), void *data) {
-    int error, ok=0, files=0, sfo=0; uint64_t expanded=0;
-    if (!raw_names(b,cancel,data)) return 0;
-    zip_t *z=zip_open(b->archive,ZIP_RDONLY|ZIP_CHECKCONS,&error); if (!z) return 0;
+static int zip_entries(zip_t *z, const google_backup *b, int (*cancel)(void*), void *data, int *error) {
+    int ok=0, files=0, sfo=0; uint64_t expanded=0;
     zip_int64_t count=zip_get_num_entries(z,0);
     if (count<=0 || count>4096) goto done;
     for (zip_uint64_t i=0;i<(zip_uint64_t)count;i++) {
@@ -215,7 +213,33 @@ int google_download_zip(const google_backup *b, int (*cancel)(void*), void *data
         if (!valid) goto done;
     }
     ok=files && sfo && !cancel(data);
-done: zip_discard(z); return ok;
+done:
+    if (!ok) {
+        *error=zip_error_code_zip(zip_get_error(z));
+        if (!*error) *error=cancel(data)?ZIP_ER_CANCELLED:ZIP_ER_INCONS;
+    }
+    zip_discard(z); return ok;
+}
+int google_download_zip_fd(const google_backup *b, int fd, int (*cancel)(void*), void *data, int *error) {
+    *error=0;
+    int copy=dup(fd);
+    if (copy<0) return 0;
+    FILE *f=fdopen(copy,"rb");
+    if (!f) { close(copy); return 0; }
+    int ok=raw_names(f,cancel,data);
+    int saved=errno;
+    if (fclose(f)) { ok=0; saved=errno; }
+    if (!ok) { *error=cancel(data)?ZIP_ER_CANCELLED:ZIP_ER_INCONS; errno=saved; return 0; }
+    if ((copy=dup(fd))<0) return 0;
+    zip_t *z=zip_fdopen(copy,ZIP_RDONLY|ZIP_CHECKCONS,error);
+    if (!z) { saved=errno; close(copy); errno=saved; return 0; }
+    return zip_entries(z,b,cancel,data,error);
+}
+int google_download_zip(const google_backup *b, int (*cancel)(void*), void *data) {
+    FILE *f=fopen(b->archive,"rb"); if (!f) return 0;
+    int error=0, ok=google_download_zip_fd(b,fileno(f),cancel,data,&error);
+    if (fclose(f)) ok=0;
+    return ok;
 }
 static int cache_directory(void) {
     char path[256];

@@ -246,6 +246,9 @@ jobs:
     - name: Add save patches to Package
       run: make createzip
 
+    - name: Audit restore SDK compatibility
+      run: python3 tools/audit_restore_sdk.py "${OO_PS4_TOOLCHAIN}" oosdk_libraries/libzip-1.9.2
+
     - name: Build PS4 Save Sync Package
       run: |
         make

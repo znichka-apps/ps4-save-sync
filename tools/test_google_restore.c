@@ -5,6 +5,7 @@
 #include <unistd.h>
 #include <fcntl.h>
 #include <errno.h>
+#include <stdarg.h>
 #include <sys/stat.h>
 #include <sqlite3.h>
 #include <zip.h>
@@ -14,7 +15,7 @@
 
 app_config_t apollo_config={.user_id=42};
 static google_backup backup;
-static int stop, mode, mounts, patches, details_calls, unmounts, writes;
+static int stop, mode, mounts, patches, details_calls, unmounts, writes, archive_stats, fdopens;
 static const char *target="build/host/restore-mount/";
 static save_entry_t entry={.title_id="CUSA12345",.dir_name="SAVE"};
 void *open_sqlite_db(const char *path) {
@@ -65,6 +66,9 @@ static int mount_new(void *p,const google_backup *b,uint32_t blocks,char *out,si
     assert(!mkdir(target,0700)); snprintf(out,size,"%s",target);
     if (mode==7) { assert(!symlink("../restore-sentinel","build/host/restore-mount/sub")); }
     if (mode==9) stop=1;
+    if (mode==11) { assert(!mkdir("build/host/restore-mount/sub",0700)); assert(!symlink("../../restore-sentinel/data.bin","build/host/restore-mount/sub/data.bin")); }
+    if (mode==12) { assert(!mkdir("build/host/restore-mount/sub",0700)); assert(!mkfifo("build/host/restore-mount/sub/data.bin",0600)); }
+    if (mode==13) { assert(!mkdir("build/host/restore-mount/sub",0700)); assert(!link("build/host/restore-sentinel/data.bin","build/host/restore-mount/sub/data.bin")); }
     return 1;
 }
 static int ownership(void *p,const char *path) { (void)p; assert(!strcmp(path,target)); patches++; return mode!=2; }
@@ -72,21 +76,79 @@ static int details(void *p,const google_backup *b,const char *path) { (void)p;(v
 static int unmount(void *p) { (void)p; unmounts++; if (mode==8) stop=1; return mode!=3; }
 static int finish(void *p) { (void)p; if (mode==10) { stop=1; return 0; } return !stop; }
 ssize_t __real_write(int,const void*,size_t);
+int __real_fstat(int,struct stat*);
+int __wrap_fstat(int fd,struct stat *s) {
+    if (mode==14 && mounts) { errno=EIO; return -1; }
+    int result=__real_fstat(fd,s);
+    if (!result && S_ISREG(s->st_mode) && !mounts && ++archive_stats==2 && (mode==18 || mode==19)) {
+        char moved[320]; snprintf(moved,sizeof(moved),"%s.moved",mode==18?backup.archive:backup.temp_dir);
+        if (mode==18) {
+            assert(!rename(backup.archive,moved));
+            FILE *in=fopen(moved,"rb"), *out=fopen(backup.archive,"wb"); assert(in && out);
+            unsigned char bytes[4096]; size_t n;
+            while ((n=fread(bytes,1,sizeof(bytes),in))) assert(fwrite(bytes,1,n,out)==n);
+            assert(!ferror(in) && !fclose(in) && !fclose(out));
+        } else {
+            assert(!rename(backup.temp_dir,moved));
+            const char *base=strrchr(moved,'/'); assert(base);
+            assert(!symlink(base+1,backup.temp_dir));
+        }
+    }
+    return result;
+}
+int __real_ftruncate(int,off_t);
+int __wrap_ftruncate(int fd,off_t size) {
+    if (mode==15) { errno=EIO; return -1; }
+    return __real_ftruncate(fd,size);
+}
+int __real_openat(int,const char*,int,...);
+int __wrap_openat(int fd,const char *p,int flags,...) {
+    assert(flags&O_NOFOLLOW);
+    mode_t permissions=0;
+    if (flags&O_CREAT) { va_list args; va_start(args,flags); permissions=va_arg(args,int); va_end(args); }
+    if (mode==16 && mounts) { errno=EIO; return -1; }
+    return __real_openat(fd,p,flags,permissions);
+}
+int __real_fsync(int);
+int __wrap_fsync(int fd) {
+    if (mode==17) { errno=EIO; return -1; }
+    return __real_fsync(fd);
+}
+zip_t *__real_zip_fdopen(int,int,int*);
+zip_t *__wrap_zip_fdopen(int fd,int flags,int *error) {
+    fdopens++;
+    if (mode==20 || (mode==21 && fdopens==2)) { *error=ZIP_ER_OPEN; errno=EBADF; return NULL; }
+    return __real_zip_fdopen(fd,flags,error);
+}
 ssize_t __wrap_write(int fd,const void *p,size_t n) {
     writes++; if (mode==1) { errno=ENOSPC; return -1; }
     ssize_t result=__real_write(fd,p,n); if (mode==4) stop=1; return result;
 }
 static void reset_target(void) {
-    unlink("build/host/restore-mount/sub/data.bin"); unlink("build/host/restore-mount/sub");
+    char link_byte;
+    if (readlink("build/host/restore-mount/sub",&link_byte,1)<0) unlink("build/host/restore-mount/sub/data.bin");
+    unlink("build/host/restore-mount/sub");
     rmdir("build/host/restore-mount/sub"); unlink("build/host/restore-mount/sce_sys/param.sfo");
     rmdir("build/host/restore-mount/sce_sys"); rmdir(target);
-    mounts=patches=details_calls=unmounts=writes=stop=mode=0; backup.mount_blocked=0;
+    mounts=patches=details_calls=unmounts=writes=stop=mode=archive_stats=fdopens=0; backup.mount_blocked=0;
 }
 static void hash_fixture(void) { assert(google_backup_hash(&backup,cancel,NULL)); }
 int main(void) {
+#ifdef __PS4__
+    extern int sdk_failure, sdk_stub_calls, sdk_native_calls;
+    google_restore_io initial_io={NULL,cancel,absent,mount_new,ownership,details,unmount,finish};
+    for (sdk_failure=1;sdk_failure<=6;sdk_failure++) {
+        assert(google_restore_run(&backup,&initial_io)==GOOGLE_UPLOAD_FAILED);
+        assert(!mounts && !writes && strstr(backup.diagnostic,"op=1") && strstr(backup.diagnostic,"errno="));
+        assert(strstr(backup.diagnostic,sdk_failure==1?"native=-1234":sdk_failure==4?"native=0":sdk_failure>=5?"native=-9012":"native=-5678"));
+    }
+    sdk_failure=0;
+#endif
     mkdir("build/host/cache",0700); mkdir("build/host/restore-users",0700);
     mkdir("build/host/restore-users/0000002a",0700); mkdir("build/host/restore-users/0000002a/CUSA12345",0700);
     mkdir("build/host/restore-sentinel",0700);
+    FILE *sentinel=fopen("build/host/restore-sentinel/data.bin","wb"); assert(sentinel);
+    assert(fputs("unchanged",sentinel)>=0 && !fclose(sentinel));
     sqlite3 *db; assert(sqlite3_open("build/host/restore-users/0000002a.db",&db)==SQLITE_OK);
     assert(sqlite3_exec(db,"DROP TABLE IF EXISTS savedata; CREATE TABLE savedata(title_id TEXT, dir_name TEXT)",NULL,NULL,NULL)==SQLITE_OK);
     sqlite3_close(db);
@@ -95,11 +157,36 @@ int main(void) {
     strcpy(backup.title,"CUSA12345"); strcpy(backup.directory,"SAVE"); backup.user=42;
     google_restore_io io={NULL,cancel,absent,mount_new,ownership,details,unmount,finish};
     reset_target(); fixture("CUSA12345","SAVE",NULL,0100000,0); hash_fixture();
-    assert(absent(NULL,&backup)==1); assert(google_restore_run(&backup,&io)==GOOGLE_UPLOAD_SUCCESS);
+    assert(absent(NULL,&backup)==1);
+    int first=google_restore_run(&backup,&io);
+    if (first!=GOOGLE_UPLOAD_SUCCESS) fprintf(stderr,"Restore: %s\n",backup.diagnostic);
+    assert(first==GOOGLE_UPLOAD_SUCCESS);
     assert(mounts==1 && patches==1 && details_calls==1 && unmounts==1);
     char data[17]={0}; FILE *f=fopen("build/host/restore-mount/sub/data.bin","rb"); assert(f);
     assert(fread(data,1,16,f)==16 && !strcmp(data,"restored content")); assert(!fclose(f));
     assert(!access(backup.archive,R_OK)); reset_target();
+#ifdef __PS4__
+    extern int sdk_operation_failure;
+    for (sdk_operation_failure=1;sdk_operation_failure<=2;sdk_operation_failure++) {
+        assert(google_restore_run(&backup,&io)==GOOGLE_UPLOAD_FAILED);
+        assert(mounts==(sdk_operation_failure==2));
+        assert(strstr(backup.diagnostic,sdk_operation_failure==1?"op=5":"op=102"));
+        char error[24]; snprintf(error,sizeof(error),"errno=%d",ENOSYS); assert(strstr(backup.diagnostic,error));
+        reset_target();
+    }
+    sdk_operation_failure=0;
+#endif
+    /* Private path/type/ownership policy fails before target creation. */
+    assert(!chmod(backup.temp_dir,0777));
+    assert(google_restore_run(&backup,&io)==GOOGLE_UPLOAD_FAILED && !mounts && !writes);
+    assert(strstr(backup.diagnostic,"op=2")); assert(!chmod(backup.temp_dir,0700));
+    char moved[320]; snprintf(moved,sizeof(moved),"%s.moved",backup.archive);
+    assert(!rename(backup.archive,moved)); assert(!symlink("backup.zip.moved",backup.archive));
+    assert(google_restore_run(&backup,&io)==GOOGLE_UPLOAD_FAILED && !mounts && !writes);
+    assert(strstr(backup.diagnostic,"op=3")); assert(!unlink(backup.archive)); assert(!rename(moved,backup.archive));
+    assert(!link(backup.archive,moved));
+    assert(google_restore_run(&backup,&io)==GOOGLE_UPLOAD_FAILED && !mounts && !writes);
+    assert(strstr(backup.diagnostic,"op=3")); assert(!unlink(moved));
     /* Real absence checks: key, orphan volume, DB-only row, wrong user, errors. */
     const char *paths[]={"build/host/restore-users/0000002a/CUSA12345/SAVE.bin","build/host/restore-users/0000002a/CUSA12345/sdimg_SAVE"};
     for (unsigned i=0;i<2;i++) {
@@ -128,7 +215,7 @@ int main(void) {
         assert(google_restore_run(&backup,&io)==GOOGLE_UPLOAD_FAILED && mounts==0 && strstr(backup.diagnostic,"SFO"));
     }
     fixture("CUSA12345","SAVE",NULL,0100000,0); hash_fixture();
-    for (int failure=1;failure<=10;failure++) {
+    for (int failure=1;failure<=17;failure++) {
         reset_target(); mode=failure;
         int result=google_restore_run(&backup,&io);
         assert(result!=GOOGLE_UPLOAD_SUCCESS && !access(backup.archive,R_OK));
@@ -137,14 +224,41 @@ int main(void) {
         if (failure==4 || failure==8 || failure==9 || failure==10) assert(result==GOOGLE_UPLOAD_CANCELLED);
         if (failure==2) assert(strstr(backup.diagnostic,"Ownership"));
         if (failure==3) assert(strstr(backup.diagnostic,"Unmount"));
-        if (failure==7) assert(access("build/host/restore-sentinel/data.bin",F_OK));
+        if (failure==7 || failure==11 || failure==12 || failure==13) {
+            char contents[10]={0}; f=fopen("build/host/restore-sentinel/data.bin","rb"); assert(f);
+            assert(fread(contents,1,9,f)==9 && !strcmp(contents,"unchanged") && !fclose(f));
+        }
+        if (failure>=14) {
+            char operation[20]; snprintf(operation,sizeof(operation),"op=%d",failure==14?105:failure==15?106:failure==16?103:108);
+            assert(strstr(backup.diagnostic,operation));
+            char error[24]; snprintf(error,sizeof(error),"errno=%d",EIO); assert(strstr(backup.diagnostic,error));
+        }
     }
     reset_target(); stop=1;
     assert(google_restore_run(&backup,&io)==GOOGLE_UPLOAD_CANCELLED && mounts==0);
+    for (int race=18;race<=19;race++) {
+        reset_target(); mode=race;
+        assert(google_restore_run(&backup,&io)==GOOGLE_UPLOAD_FAILED && !mounts && !writes);
+        assert(strstr(backup.diagnostic,"op=5"));
+        snprintf(moved,sizeof(moved),"%s.moved",race==18?backup.archive:backup.temp_dir);
+        assert(!unlink(race==18?backup.archive:backup.temp_dir));
+        assert(!rename(moved,race==18?backup.archive:backup.temp_dir));
+    }
+    for (int failure=20;failure<=21;failure++) {
+        reset_target(); mode=failure;
+        assert(google_restore_run(&backup,&io)==GOOGLE_UPLOAD_FAILED && !mounts && !writes);
+        assert(strstr(backup.diagnostic,failure==20?"op=4":"op=6"));
+        char code[24]; snprintf(code,sizeof(code),"zip=%d",ZIP_ER_OPEN); assert(strstr(backup.diagnostic,code));
+        snprintf(code,sizeof(code),"errno=%d",EBADF); assert(strstr(backup.diagnostic,code));
+    }
+    reset_target();
     stop=0; /* Changes after download must fail the second hash before creation. */
     f=fopen(backup.archive,"ab"); assert(f); assert(fputc('x',f)!=EOF); assert(!fclose(f));
     assert(google_restore_run(&backup,&io)==GOOGLE_UPLOAD_FAILED && mounts==0);
     assert(google_backup_cleanup(&backup));
+#ifdef __PS4__
+    assert(!sdk_stub_calls && sdk_native_calls>0);
+#endif
     puts("Google restore host tests passed (empty/existing targets, SFO, paths, writes, cancellation, ownership, details, unmount).");
     return 0;
 }

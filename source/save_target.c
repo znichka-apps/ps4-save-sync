@@ -5,21 +5,24 @@
 #include <sqlite3.h>
 #include "saves.h"
 #include "settings.h"
+#include "restore_fs.h"
 
 /* Fail closed on orphan volumes, keys, database rows, and lookup errors.
    These paths are built only from previously validated local restore metadata. */
 int orbis_SaveTargetAbsent(const save_entry_t *save, uint32_t user)
 {
     if (user != apollo_config.user_id) return -1;
+    int native_error;
+    if (!restore_fs_init(&native_error)) return -1;
     char path[256]; struct stat st;
     snprintf(path,sizeof(path),SAVES_PATH_HDD "%s",user,save->title_id);
-    if (!lstat(path,&st)) { if (!S_ISDIR(st.st_mode)) return -1; }
+    if (!restore_fs_lstat(path,&st)) { if (!S_ISDIR(st.st_mode)) return -1; }
     else if (errno!=ENOENT) return -1;
     snprintf(path,sizeof(path),SAVES_PATH_HDD "%s/%s.bin",user,save->title_id,save->dir_name);
-    if (!lstat(path,&st)) return 0;
+    if (!restore_fs_lstat(path,&st)) return 0;
     if (errno!=ENOENT) return -1;
     snprintf(path,sizeof(path),SAVES_PATH_HDD "%s/sdimg_%s",user,save->title_id,save->dir_name);
-    if (!lstat(path,&st)) return 0;
+    if (!restore_fs_lstat(path,&st)) return 0;
     if (errno!=ENOENT) return -1;
     snprintf(path,sizeof(path),SAVES_DB_PATH,user);
     sqlite3 *db=open_sqlite_db(path); if (!db) return -1;

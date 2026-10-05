@@ -39,12 +39,22 @@ cc -std=gnu11 -Wall -Wextra -Werror -Wno-deprecated-declarations -fsanitize=addr
   source/google_download.c source/google_backup.c source/cJSON.c -lzip -lcurl -lmbedcrypto -o build/host/test_google_download
 build/host/test_google_download
 
+for platform in host ps4; do
+platform_flag=''
+compat_source=''
+compat_wrap=''
+if [ "$platform" = ps4 ]; then
+  platform_flag='-D__PS4__'
+  compat_source='tools/restore_sdk_mock.c'
+  compat_wrap='-Wl,--wrap=lstat,--wrap=fstatat,--wrap=mkdirat'
+fi
 cc -std=gnu11 -Wall -Wextra -Werror -Wno-deprecated-declarations -fsanitize=address,undefined -g \
   -DGOOGLE_BACKUP_CACHE='"build/host/cache/"' -Itools/restore_host_include -Iinclude \
-  tools/test_google_restore.c source/google_restore.c source/save_target.c \
+  $platform_flag $compat_source tools/test_google_restore.c source/google_restore.c source/save_target.c source/restore_fs.c \
   source/google_download.c source/google_backup.c source/cJSON.c -lzip -lcurl -lmbedcrypto -lsqlite3 \
-  -Wl,--wrap=write -o build/host/test_google_restore
-build/host/test_google_restore
+  $compat_wrap -Wl,--wrap=write,--wrap=fstat,--wrap=ftruncate,--wrap=openat,--wrap=fsync,--wrap=zip_fdopen -o build/host/test_google_restore_$platform
+build/host/test_google_restore_$platform
+done
 
 cc -std=gnu11 -Wall -Wextra -Werror -fsanitize=address,undefined -g \
   -Itools/restore_host_include -Iinclude tools/test_save_create.c -o build/host/test_save_create
