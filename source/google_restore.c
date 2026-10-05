@@ -27,6 +27,17 @@ static int same_directory(const struct stat *a,const struct stat *b)
 }
 static int safe_lstat(const char *path,struct stat *st) { return restore_fs_lstat(path,st); }
 
+static int target_absent(google_backup *b,const google_restore_io *io,int op,int zip_error)
+{
+    int status=io->absent(io->data,b);
+    if (status==1) return 1;
+    errno=status==0?EEXIST:EIO;
+    snprintf(b->diagnostic,sizeof(b->diagnostic),
+        "Google restore failed [op=%d errno=%d zip=%d]: %s. Download retained.",
+        op,errno,zip_error,status==0?"Save already exists":"Save target could not be checked");
+    return 0;
+}
+
 static int hash_fd(int fd, const google_backup *b, const google_restore_io *io, int *code)
 {
     unsigned char buffer[16384], digest[16]; char hex[33]; uint64_t size=0;
@@ -318,7 +329,7 @@ int google_restore_run(google_backup *b, const google_restore_io *io)
     }
     if (io->cancelled(io->data)) { result=GOOGLE_UPLOAD_CANCELLED; goto done; }
     op=8;
-    if (io->absent(io->data,b)!=1) { errno=EEXIST; goto fail; }
+    if (!target_absent(b,io,op,zip_error)) goto fail;
     if (io->cancelled(io->data)) { result=GOOGLE_UPLOAD_CANCELLED; goto done; }
     snprintf(stage,sizeof(stage),"%s/stage",b->temp_dir);
     staged=1;
@@ -331,7 +342,7 @@ int google_restore_run(google_backup *b, const google_restore_io *io)
     if (safe_lstat(b->archive,&path_after) || !same(&before,&path_after) || fstat(fd,&after) || !same(&before,&after) ||
         safe_lstat(b->temp_dir,&dir_after) || !same_directory(&private_stat,&dir_after) ||
         safe_lstat(stage,&dir_after) || !S_ISDIR(dir_after.st_mode) || (dir_after.st_mode&077)) { errno=EINVAL; goto fail; }
-    if (io->absent(io->data,b)!=1) { errno=EEXIST; goto fail; }
+    if (!target_absent(b,io,op,zip_error)) goto fail;
     if (io->cancelled(io->data)) { result=GOOGLE_UPLOAD_CANCELLED; goto done; }
     op=10;
     if (!io->import_staged(io->data,b,stage)) {

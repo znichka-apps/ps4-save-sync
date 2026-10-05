@@ -11,7 +11,7 @@
 #include "google_restore.h"
 
 static google_backup backup;
-static int cancel_after, cancel_calls, absent_calls, target_race, imports, cleanup_failure;
+static int cancel_after, cancel_calls, absent_calls, target_reject_at, target_status, imports, cleanup_failure;
 enum { SFO_OK, SFO_SHORT, SFO_MAGIC, SFO_VERSION, SFO_COUNT, SFO_TABLE, SFO_KEY_OFFSET, SFO_INDEX_OFFSET,
     SFO_AGGREGATE, SFO_LONG_KEY, SFO_DUPLICATE,
     SFO_STRING_END, SFO_TITLE_MISMATCH, SFO_DIRECTORY_MISMATCH, SFO_BLOCKS_LOW, SFO_BLOCKS_HIGH,
@@ -103,7 +103,7 @@ static void fixture(const char *extra,unsigned extra_mode,int include_sfo) {
 static int cancelled(void *p) { (void)p; return cancel_after && ++cancel_calls>=cancel_after; }
 static int absent(void *p,const google_backup *b) {
     (void)p;assert(!strcmp(b->title,"CUSA12345")&&!strcmp(b->directory,"SAVE"));
-    absent_calls++;return target_race&&absent_calls>=2?0:1;
+    absent_calls++;return target_reject_at&&absent_calls>=target_reject_at?target_status:1;
 }
 static int import_staged(void *p,const google_backup *b,const char *stage) {
     (void)p;assert(!strcmp(b->title,"CUSA12345")&&!strcmp(b->directory,"SAVE"));
@@ -128,7 +128,8 @@ static void clear_tree(const char *p) {
     closedir(d);rmdir(p);
 }
 static void reset(void) {
-    cancel_after=cancel_calls=absent_calls=target_race=imports=cleanup_failure=0;
+    cancel_after=cancel_calls=absent_calls=target_reject_at=imports=cleanup_failure=0;
+    target_status=1;
     sfo_case=SFO_OK;
     clear_tree(backup.temp_dir);strcpy(backup.temp_dir,GOOGLE_BACKUP_CACHE "drive-XXXXXX");assert(mkdtemp(backup.temp_dir));
     snprintf(backup.archive,sizeof(backup.archive),"%s/backup.zip",backup.temp_dir);
@@ -215,8 +216,23 @@ int main(void) {
     assert(google_restore_run(&backup,&io)==GOOGLE_UPLOAD_FAILED&&!imports&&access(backup.archive,F_OK)==0);
     reset();fixture(NULL,0100000,0);
     assert(google_restore_run(&backup,&io)==GOOGLE_UPLOAD_FAILED&&!imports&&access(backup.archive,F_OK)==0);
-    reset();fixture(NULL,0100000,1);target_race=1;
-    assert(google_restore_run(&backup,&io)==GOOGLE_UPLOAD_FAILED&&!imports&&absent_calls==2&&access(backup.archive,F_OK)==0);
+    /* An occupied source/target slot is refused before staging, and a racing
+       target is refused after staging. Neither failure consumes the ZIP. */
+    for (int check=1;check<=2;check++) {
+        reset();fixture(NULL,0100000,1);target_reject_at=check;target_status=0;
+        assert(google_restore_run(&backup,&io)==GOOGLE_UPLOAD_FAILED&&!imports&&absent_calls==check);
+        char expected[96];snprintf(expected,sizeof(expected),"op=%d errno=%d zip=0",check==1?8:9,EEXIST);
+        assert(strstr(backup.diagnostic,expected)&&strstr(backup.diagnostic,"Save already exists")&&
+            strstr(backup.diagnostic,"Download retained")&&access(backup.archive,F_OK)==0);
+        char stage[320];snprintf(stage,sizeof(stage),"%s/stage",backup.temp_dir);
+        assert(access(stage,F_OK)!=0);
+    }
+    reset();fixture(NULL,0100000,1);target_reject_at=1;target_status=-1;
+    assert(google_restore_run(&backup,&io)==GOOGLE_UPLOAD_FAILED&&!imports&&absent_calls==1);
+    char unknown[96];snprintf(unknown,sizeof(unknown),"op=8 errno=%d zip=0",EIO);
+    assert(strstr(backup.diagnostic,unknown)&&
+        strstr(backup.diagnostic,"Save target could not be checked")&&
+        !strstr(backup.diagnostic,"Save already exists")&&access(backup.archive,F_OK)==0);
     reset();fixture(NULL,0100000,1);cancel_after=4;
     int cancelled_result=google_restore_run(&backup,&io);
     if(cancelled_result!=GOOGLE_UPLOAD_CANCELLED)fprintf(stderr,"cancel result=%d calls=%d imports=%d diag=%s\n",cancelled_result,cancel_calls,imports,backup.diagnostic);
