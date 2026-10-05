@@ -20,6 +20,81 @@ static int same(const struct stat *a, const struct stat *b)
         a->st_mtim.tv_sec==b->st_mtim.tv_sec && a->st_mtim.tv_nsec==b->st_mtim.tv_nsec &&
         a->st_ctim.tv_sec==b->st_ctim.tv_sec && a->st_ctim.tv_nsec==b->st_ctim.tv_nsec;
 }
+#ifdef GOOGLE_RESTORE_OPENAT_PROBE
+/* TEMPORARY CONSOLE DIAGNOSTIC. Compile only an explicitly labeled probe
+   build. It opens the validated private archive read-only, performs no reads,
+   and never enters save validation, mounting, or extraction. */
+static void restore_openat_probe(google_backup *b, int private_fd,
+                                const struct stat *private_stat)
+{
+    static const int candidates[]={
+        O_RDONLY|O_NOFOLLOW|O_NONBLOCK,
+        O_RDONLY|O_NOFOLLOW,
+        O_RDONLY|O_NONBLOCK,
+        O_RDONLY
+    };
+    /* The variants are diagnostic-only and read-only. The 0700 job directory
+       is exclusive to this worker; native lstat is repeated before each open,
+       and each returned descriptor is fstat-checked and closed before moving on. */
+    struct stat private_path, archive_path, current;
+    int error=0;
+    errno=0;
+    if (restore_fs_lstat(b->temp_dir,&private_path)) error=errno;
+    else if (!same(private_stat,&private_path) || !S_ISDIR(private_path.st_mode) ||
+             (private_path.st_mode&077)) error=EINVAL;
+    errno=0;
+    if (!error && restore_fs_lstat(b->archive,&archive_path)) error=errno;
+    else if (!error && (!S_ISREG(archive_path.st_mode) || archive_path.st_uid!=private_path.st_uid ||
+             archive_path.st_nlink!=1 || archive_path.st_size<0 ||
+             (uint64_t)archive_path.st_size!=b->size)) error=EINVAL;
+    if (error) {
+        snprintf(b->diagnostic,sizeof(b->diagnostic),
+            "TEMP OPENAT PROBE ABORTED: private archive no-follow checks failed errno=%d; no save touched.",error);
+        return;
+    }
+    int used=snprintf(b->diagnostic,sizeof(b->diagnostic),
+        "TEMP OPENAT PROBE no-save precheck=ok;");
+    for (unsigned i=0;i<sizeof(candidates)/sizeof(candidates[0]) && used>0 &&
+         (size_t)used<sizeof(b->diagnostic);i++) {
+        errno=0;
+        int stat_error=restore_fs_lstat(b->archive,&current);
+        if (stat_error || !same(&archive_path,&current)) {
+            size_t left=sizeof(b->diagnostic)-(size_t)used;
+            snprintf(b->diagnostic+used,left," abort=archive-changed errno=%d",
+                stat_error?errno:EINVAL);
+            break;
+        }
+        errno=0;
+        int fd=openat(private_fd,"backup.zip",candidates[i]);
+        int open_error=fd<0?errno:0, identity_ok=1, identity_error=0, close_error=0;
+        if (fd>=0) {
+            if (fstat(fd,&current)) { identity_ok=0; identity_error=errno; }
+            else if (!same(&archive_path,&current)) { identity_ok=0; identity_error=EINVAL; }
+            if (close(fd)) close_error=errno;
+        }
+        size_t left=sizeof(b->diagnostic)-(size_t)used;
+        int added=snprintf(b->diagnostic+used,left," f=0x%08x:%s:%d%s",
+            (unsigned)candidates[i],fd<0?"fail":"ok",open_error,
+            identity_ok?"":" identity-mismatch");
+        if (added<=0 || (size_t)added>=left) break;
+        used+=added;
+        if (!identity_ok || close_error) {
+            left=sizeof(b->diagnostic)-(size_t)used;
+            snprintf(b->diagnostic+used,left," abort=%s:%d",
+                identity_ok?"close-failed":"identity-check-failed",
+                identity_ok?close_error:identity_error);
+            break;
+        }
+    }
+    errno=0;
+    int final_stat_error=restore_fs_lstat(b->archive,&current);
+    if (final_stat_error || !same(&archive_path,&current)) {
+        size_t left=sizeof(b->diagnostic)-strlen(b->diagnostic);
+        snprintf(b->diagnostic+strlen(b->diagnostic),left," archive-after=changed:%d",
+            final_stat_error?errno:EINVAL);
+    }
+}
+#endif
 static int hash_fd(int fd, const google_backup *b, const google_restore_io *io, int *code)
 {
     unsigned char buffer[16384], digest[16]; char hex[33]; uint64_t size=0;
@@ -205,6 +280,15 @@ int google_restore_run(google_backup *b, const google_restore_io *io)
     private_fd=open(b->temp_dir,O_RDONLY|O_DIRECTORY|O_NOFOLLOW);
     if (private_fd<0 || fstat(private_fd,&private_stat) || !S_ISDIR(private_stat.st_mode) ||
         (private_stat.st_mode&077) || private_stat.st_uid!=geteuid()) FAIL("Invalid private archive directory.");
+#ifdef GOOGLE_RESTORE_OPENAT_PROBE
+    restore_openat_probe(b,private_fd,&private_stat);
+    if (close(private_fd)) {
+        size_t used=strlen(b->diagnostic), left=sizeof(b->diagnostic)-used;
+        snprintf(b->diagnostic+used,left," private-close-failed:%d",errno);
+    }
+    /* A probe build is diagnostic-only and can never continue into restore. */
+    return GOOGLE_UPLOAD_FAILED;
+#endif
     op=3; errno=0;
     fd=openat(private_fd,"backup.zip",O_RDONLY|O_NOFOLLOW|O_NONBLOCK);
     /* Capture syscall errno before formatting or cleanup. Policy failures use

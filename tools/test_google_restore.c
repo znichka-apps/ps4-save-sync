@@ -16,6 +16,10 @@
 app_config_t apollo_config={.user_id=42};
 static google_backup backup;
 static int stop, mode, mounts, patches, details_calls, unmounts, writes, archive_stats, fdopens;
+#ifdef GOOGLE_RESTORE_OPENAT_PROBE
+static int probe_openat_calls, probe_injected_failure;
+static int probe_openat_flags[4];
+#endif
 static const char *target="build/host/restore-mount/";
 static save_entry_t entry={.title_id="CUSA12345",.dir_name="SAVE"};
 void *open_sqlite_db(const char *path) {
@@ -110,11 +114,26 @@ int __wrap_ftruncate(int fd,off_t size) {
 }
 int __real_openat(int,const char*,int,...);
 int __wrap_openat(int fd,const char *p,int flags,...) {
+#ifdef GOOGLE_RESTORE_OPENAT_PROBE
+    if (!mounts && !strcmp(p,"backup.zip")) {
+        static const int expected[]={
+            O_RDONLY|O_NOFOLLOW|O_NONBLOCK,
+            O_RDONLY|O_NOFOLLOW,
+            O_RDONLY|O_NONBLOCK,
+            O_RDONLY
+        };
+        assert(probe_openat_calls<4);
+        assert(flags==expected[probe_openat_calls]);
+        probe_openat_flags[probe_openat_calls]=flags;
+        if (probe_openat_calls++==probe_injected_failure) { errno=EINVAL; return -1; }
+    }
+#else
     assert(flags&O_NOFOLLOW);
     if (!mounts && !strcmp(p,"backup.zip")) {
         assert(flags==(O_RDONLY|O_NOFOLLOW|O_NONBLOCK));
         if (mode==22) { errno=EINVAL; return -1; }
     }
+#endif
     mode_t permissions=0;
     if (flags&O_CREAT) { va_list args; va_start(args,flags); permissions=va_arg(args,int); va_end(args); }
     if (mode==16 && mounts) { errno=EIO; return -1; }
@@ -167,6 +186,31 @@ int main(void) {
     snprintf(backup.archive,sizeof(backup.archive),"%s/backup.zip",backup.temp_dir);
     strcpy(backup.title,"CUSA12345"); strcpy(backup.directory,"SAVE"); backup.user=42;
     google_restore_io io={NULL,cancel,absent,mount_new,ownership,details,unmount,finish};
+#ifdef GOOGLE_RESTORE_OPENAT_PROBE
+    fixture("CUSA12345","SAVE",NULL,0100000,0); hash_fixture();
+    probe_openat_calls=0; probe_injected_failure=0;
+    assert(google_restore_run(&backup,&io)==GOOGLE_UPLOAD_FAILED);
+    assert(probe_openat_calls==4 && !mounts && !writes && !patches && !details_calls && !unmounts);
+    const int expected_probe_flags[]={
+        O_RDONLY|O_NOFOLLOW|O_NONBLOCK,
+        O_RDONLY|O_NOFOLLOW,
+        O_RDONLY|O_NONBLOCK,
+        O_RDONLY
+    };
+    for (unsigned i=0;i<4;i++) assert(probe_openat_flags[i]==expected_probe_flags[i]);
+    char probe_record[40];
+    snprintf(probe_record,sizeof(probe_record),"f=0x%08x:fail:%d",(unsigned)expected_probe_flags[0],EINVAL);
+    assert(strstr(backup.diagnostic,probe_record));
+    for (unsigned i=1;i<4;i++) {
+        snprintf(probe_record,sizeof(probe_record),"f=0x%08x:ok:0",(unsigned)expected_probe_flags[i]);
+        assert(strstr(backup.diagnostic,probe_record));
+    }
+    assert(strstr(backup.diagnostic,"TEMP OPENAT PROBE no-save precheck=ok"));
+    assert(!access(backup.archive,R_OK));
+    assert(google_backup_cleanup(&backup));
+    puts("Temporary openat probe tests passed (native no-follow precheck, four read-only flag variants, immediate close, no save activity).");
+    return 0;
+#endif
     reset_target(); fixture("CUSA12345","SAVE",NULL,0100000,0); hash_fixture();
     assert(absent(NULL,&backup)==1);
     int first=google_restore_run(&backup,&io);
