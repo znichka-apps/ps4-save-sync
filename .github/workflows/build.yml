@@ -250,13 +250,11 @@ jobs:
       run: python3 tools/audit_restore_sdk.py "${OO_PS4_TOOLCHAIN}" oosdk_libraries/libzip-1.9.2
 
     - name: Build PS4 Save Sync Package
-      run: |
-        make EXTRAFLAGS="-fcolor-diagnostics -Wall -D__PS4__ -DGOOGLE_RESTORE_OPENAT_PROBE"
-        mv IV0000-PSSY00001_00-PS4SAVESYNC00000.pkg ps4-save-sync-openat-probe_${{ env.sha_name }}.pkg
+      run: make
 
-    - name: Upload openat probe diagnostic package
+    - name: Upload PS4 Save Sync package
       uses: actions/upload-artifact@v4
       with:
-        name: ps4-save-sync-openat-probe_${{ env.sha_name }}
-        path: ps4-save-sync-openat-probe_${{ env.sha_name }}.pkg
+        name: ps4-save-sync_${{ env.sha_name }}
+        path: IV0000-PSSY00001_00-PS4SAVESYNC00000.pkg
         if-no-files-found: error
