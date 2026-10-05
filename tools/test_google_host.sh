@@ -63,7 +63,7 @@ cc -std=gnu11 -Wall -Wextra -Werror -Wno-deprecated-declarations -fsanitize=addr
   -Itools/restore_host_include -Iinclude tools/test_google_restore.c source/google_restore.c \
   source/save_target.c source/restore_fs.c source/google_download.c source/google_backup.c source/cJSON.c \
   -lzip -lcurl -lmbedcrypto -lsqlite3 \
-  -Wl,--wrap=write,--wrap=fstat,--wrap=ftruncate,--wrap=openat,--wrap=fsync,--wrap=zip_fdopen \
+  -Wl,--wrap=write,--wrap=fstat,--wrap=ftruncate,--wrap=openat,--wrap=open,--wrap=fsync,--wrap=zip_fdopen \
   -o build/host/test_google_restore_probe
 build/host/test_google_restore_probe
 
@@ -74,7 +74,7 @@ cc -std=gnu11 -Wall -Wextra -Werror -Wno-deprecated-declarations -fsanitize=addr
   source/google_restore.c source/save_target.c source/restore_fs.c source/google_download.c \
   source/google_backup.c source/cJSON.c -lzip -lcurl -lmbedcrypto -lsqlite3 \
   -Wl,--wrap=lstat,--wrap=fstatat,--wrap=mkdirat \
-  -Wl,--wrap=write,--wrap=fstat,--wrap=ftruncate,--wrap=openat,--wrap=fsync,--wrap=zip_fdopen \
+  -Wl,--wrap=write,--wrap=fstat,--wrap=ftruncate,--wrap=openat,--wrap=open,--wrap=fsync,--wrap=zip_fdopen \
   -o build/host/test_google_restore_probe_ps4
 build/host/test_google_restore_probe_ps4
 

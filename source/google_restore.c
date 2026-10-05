@@ -52,30 +52,28 @@ static void restore_openat_probe(google_backup *b, int private_fd,
             "TEMP OPENAT PROBE ABORTED: private archive no-follow checks failed errno=%d; no save touched.",error);
         return;
     }
-    int used=snprintf(b->diagnostic,sizeof(b->diagnostic),
-        "TEMP OPENAT PROBE no-save precheck=ok;");
+    int used=snprintf(b->diagnostic,sizeof(b->diagnostic),"PROBE pfd=%d;",private_fd);
     for (unsigned i=0;i<sizeof(candidates)/sizeof(candidates[0]) && used>0 &&
          (size_t)used<sizeof(b->diagnostic);i++) {
         errno=0;
-        int stat_error=restore_fs_lstat(b->archive,&current);
-        if (stat_error || !same(&archive_path,&current)) {
+        int archive_stat_error=restore_fs_lstat(b->archive,&current);
+        if (archive_stat_error || !same(&archive_path,&current)) {
             size_t left=sizeof(b->diagnostic)-(size_t)used;
             snprintf(b->diagnostic+used,left," abort=archive-changed errno=%d",
-                stat_error?errno:EINVAL);
+                archive_stat_error?errno:EINVAL);
             break;
         }
         errno=0;
         int fd=openat(private_fd,"backup.zip",candidates[i]);
-        int open_error=fd<0?errno:0, identity_ok=1, identity_error=0, close_error=0;
+        int open_error=fd<0?errno:0, stat_error=0, identity_ok=1, identity_error=0, close_error=0;
         if (fd>=0) {
-            if (fstat(fd,&current)) { identity_ok=0; identity_error=errno; }
+            if (fstat(fd,&current)) { identity_ok=0; stat_error=errno; }
             else if (!same(&archive_path,&current)) { identity_ok=0; identity_error=EINVAL; }
             if (close(fd)) close_error=errno;
         }
         size_t left=sizeof(b->diagnostic)-(size_t)used;
-        int added=snprintf(b->diagnostic+used,left," f=0x%08x:%s:%d%s",
-            (unsigned)candidates[i],fd<0?"fail":"ok",open_error,
-            identity_ok?"":" identity-mismatch");
+        int added=snprintf(b->diagnostic+used,left," a%u=0x%x:%d/%d/%d/%d",
+            i,(unsigned)candidates[i],fd,open_error,stat_error?stat_error:identity_error,close_error);
         if (added<=0 || (size_t)added>=left) break;
         used+=added;
         if (!identity_ok || close_error) {
@@ -93,6 +91,58 @@ static void restore_openat_probe(google_backup *b, int private_fd,
         snprintf(b->diagnostic+strlen(b->diagnostic),left," archive-after=changed:%d",
             final_stat_error?errno:EINVAL);
     }
+
+    /* Compare pathname open against openat, with the same protections. Keep
+       the native no-follow checks on both names on either side of the open. */
+    struct stat dir_before, archive_before, dir_after, archive_after;
+    int dir_before_error=0, archive_before_error=0, dir_after_error=0, archive_after_error=0;
+    errno=0;
+    if (restore_fs_lstat(b->temp_dir,&dir_before)) dir_before_error=errno;
+    else if (!same(private_stat,&dir_before) || !S_ISDIR(dir_before.st_mode) ||
+             (dir_before.st_mode&077)) dir_before_error=EINVAL;
+    errno=0;
+    if (restore_fs_lstat(b->archive,&archive_before)) archive_before_error=errno;
+    else if (!same(&archive_path,&archive_before) || !S_ISREG(archive_before.st_mode) ||
+             archive_before.st_uid!=private_stat->st_uid || archive_before.st_nlink!=1 ||
+             archive_before.st_size<0 || (uint64_t)archive_before.st_size!=b->size)
+        archive_before_error=EINVAL;
+    int path_fd=-1, path_open_error=0, path_stat_error=0, path_identity_error=0, path_close_error=0;
+    if (!dir_before_error && !archive_before_error) {
+        errno=0;
+        path_fd=open(b->archive,O_RDONLY|O_NOFOLLOW|O_NONBLOCK);
+        if (path_fd<0) path_open_error=errno;
+        else {
+            errno=0;
+            if (fstat(path_fd,&current)) path_stat_error=errno;
+            else if (!same(&archive_before,&current) || !S_ISREG(current.st_mode) ||
+                     current.st_uid!=dir_before.st_uid || current.st_nlink!=1)
+                path_identity_error=EINVAL;
+            errno=0;
+            if (close(path_fd)) path_close_error=errno;
+        }
+    } else { path_fd=-2; path_open_error=EINVAL; }
+    errno=0;
+    if (restore_fs_lstat(b->temp_dir,&dir_after)) dir_after_error=errno;
+    else if (!same(private_stat,&dir_after) || !S_ISDIR(dir_after.st_mode) ||
+             (dir_after.st_mode&077)) dir_after_error=EINVAL;
+    errno=0;
+    if (restore_fs_lstat(b->archive,&archive_after)) archive_after_error=errno;
+    else if (!same(&archive_path,&archive_after) || !S_ISREG(archive_after.st_mode) ||
+             archive_after.st_uid!=private_stat->st_uid || archive_after.st_nlink!=1 ||
+             archive_after.st_size<0 || (uint64_t)archive_after.st_size!=b->size)
+        archive_after_error=EINVAL;
+    size_t used_path=strlen(b->diagnostic), left_path=sizeof(b->diagnostic)-used_path;
+    /* Compact result/errno pairs fit the existing UI buffer. -2 means skipped;
+       s includes descriptor metadata/type/identity validation. */
+    snprintf(b->diagnostic+used_path,left_path,
+        " p=0x%x:%d/%d s=%d/%d c=%d/%d d0=%d/%d b0=%d/%d d1=%d/%d b1=%d/%d",
+        (unsigned)(O_RDONLY|O_NOFOLLOW|O_NONBLOCK),path_fd,path_open_error,
+        path_fd<0?-2:(path_stat_error||path_identity_error?-1:0),
+        path_stat_error?path_stat_error:path_identity_error,
+        path_fd<0?-2:(path_close_error?-1:0),path_close_error,
+        dir_before_error?-1:0,dir_before_error,archive_before_error?-1:0,
+        archive_before_error,dir_after_error?-1:0,dir_after_error,
+        archive_after_error?-1:0,archive_after_error);
 }
 #endif
 static int hash_fd(int fd, const google_backup *b, const google_restore_io *io, int *code)
