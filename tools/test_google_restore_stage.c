@@ -17,7 +17,8 @@ enum { SFO_OK, SFO_SHORT, SFO_MAGIC, SFO_VERSION, SFO_COUNT, SFO_TABLE, SFO_KEY_
     SFO_STRING_END, SFO_TITLE_MISMATCH, SFO_DIRECTORY_MISMATCH, SFO_BLOCKS_LOW, SFO_BLOCKS_HIGH,
     SFO_TITLE_FORMAT, SFO_BLOCKS_FORMAT, SFO_ACCOUNT_SIZE, SFO_PARAMS_SIZE, SFO_PARAMS_TITLE,
     SFO_DETAIL_FORMAT, SFO_LIST_FORMAT, SFO_MISSING_LIST_PARAM,
-    SFO_BLOCKS_MAX_VALID };
+    SFO_BLOCKS_MAX_VALID, SFO_FORMAT_TERMINATOR_IN_MAX, SFO_FORMAT_NO_TERMINATOR,
+    SFO_FORMAT_MAX_BOUNDS, SFO_UNKNOWN_LENGTH, SFO_UNKNOWN_OFFSET };
 static int sfo_case;
 static int cancelled(void *p);
 static void put32(unsigned char *p,unsigned v) { for(unsigned i=0;i<4;i++) p[i]=(v>>(8*i))&255; }
@@ -25,8 +26,10 @@ static void put16(unsigned char *p,unsigned v) { p[0]=v&255; p[1]=v>>8; }
 static unsigned char sfo[2048]; static size_t sfo_size;
 static void make_sfo(void) {
     const char *keys[]={"TITLE_ID","SAVEDATA_DIRECTORY","SAVEDATA_BLOCKS","ACCOUNT_ID","PARAMS","MAINTITLE","SUBTITLE","DETAIL","SAVEDATA_LIST_PARAM"};
-    memset(sfo,0,sizeof(sfo)); put32(sfo,0x46535000); put32(sfo+4,0x101); put32(sfo+16,9);
-    unsigned keyoff=20+9*16,dataoff=512,k=0,v=0; put32(sfo+8,keyoff); put32(sfo+12,dataoff);
+    int unknown=sfo_case==SFO_FORMAT_TERMINATOR_IN_MAX||sfo_case==SFO_FORMAT_NO_TERMINATOR||
+        sfo_case==SFO_FORMAT_MAX_BOUNDS||sfo_case==SFO_UNKNOWN_LENGTH||sfo_case==SFO_UNKNOWN_OFFSET;
+    memset(sfo,0,sizeof(sfo)); put32(sfo,0x46535000); put32(sfo+4,0x101); put32(sfo+16,9+unknown);
+    unsigned keyoff=20+(9+unknown)*16,dataoff=512,k=0,v=0; put32(sfo+8,keyoff); put32(sfo+12,dataoff);
     for(unsigned i=0;i<9;i++) {
         unsigned char *e=sfo+20+i*16; unsigned len=4,format=0x404;
         if(i==0||i==1||(i>=5&&i<=7)){len=strlen(i==0?"CUSA12345":i==1?"SAVE":"Fixture")+1;format=0x204;}
@@ -37,6 +40,12 @@ static void make_sfo(void) {
         if(i==2) put32(sfo+dataoff+v,96);
         if(i==4) strcpy((char*)sfo+dataoff+v+0x2c,"CUSA12345");
         v+=len;
+    }
+    if(unknown) {
+        unsigned char *e=sfo+20+9*16;
+        put16(e,k);put16(e+2,0x204);put32(e+4,3);put32(e+8,4);put32(e+12,v);
+        strcpy((char*)sfo+keyoff+k,"FORMAT");
+        memcpy(sfo+dataoff+v,"PS4",3);v+=4;
     }
     sfo_size=dataoff+v;
     switch(sfo_case) {
@@ -64,6 +73,10 @@ static void make_sfo(void) {
         case SFO_LIST_FORMAT: put16(sfo+20+8*16+2,0x204); break;
         case SFO_MISSING_LIST_PARAM: sfo[keyoff+strlen("TITLE_ID")+1+strlen("SAVEDATA_DIRECTORY")+1+strlen("SAVEDATA_BLOCKS")+1+strlen("ACCOUNT_ID")+1+strlen("PARAMS")+1+strlen("MAINTITLE")+1+strlen("SUBTITLE")+1+strlen("DETAIL")+1]='X'; break;
         case SFO_BLOCKS_MAX_VALID: put32(sfo+dataoff+15,524288); break;
+        case SFO_FORMAT_NO_TERMINATOR: sfo[dataoff+v-1]='X'; break;
+        case SFO_FORMAT_MAX_BOUNDS: put32(sfo+20+9*16+8,5); break;
+        case SFO_UNKNOWN_LENGTH: put32(sfo+20+9*16+4,5); break;
+        case SFO_UNKNOWN_OFFSET: put32(sfo+20+9*16+12,0xfffffff0); break;
         default: break;
     }
 }
@@ -133,6 +146,9 @@ int main(void) {
        each pin one fixed, content-free diagnostic check and SFO field. */
     reset();sfo_case=SFO_BLOCKS_MAX_VALID;fixture(NULL,0100000,1);
     assert(google_restore_run(&backup,&io)==GOOGLE_UPLOAD_SUCCESS&&imports==1);
+    /* FORMAT has len=3, max=4, and its only NUL is at allocation offset 3. */
+    reset();sfo_case=SFO_FORMAT_TERMINATOR_IN_MAX;fixture(NULL,0100000,1);
+    assert(google_restore_run(&backup,&io)==GOOGLE_UPLOAD_SUCCESS&&imports==1);
     struct { int kind; const char *check,*field; } bad_sfo[]={
         {SFO_SHORT,"header too short","SFO header"},
         {SFO_MAGIC,"invalid magic","SFO header"},
@@ -156,7 +172,11 @@ int main(void) {
         {SFO_PARAMS_TITLE,"embedded title ID does not match selected backup","PARAMS"},
         {SFO_DETAIL_FORMAT,"expected string format","DETAIL"},
         {SFO_LIST_FORMAT,"expected 4-byte integer","SAVEDATA_LIST_PARAM"},
-        {SFO_MISSING_LIST_PARAM,"required field missing","SAVEDATA_LIST_PARAM"}
+        {SFO_MISSING_LIST_PARAM,"required field missing","SAVEDATA_LIST_PARAM"},
+        {SFO_FORMAT_NO_TERMINATOR,"unterminated string value","unrecognized field"},
+        {SFO_FORMAT_MAX_BOUNDS,"invalid value length or offset","unrecognized field"},
+        {SFO_UNKNOWN_LENGTH,"invalid value length or offset","unrecognized field"},
+        {SFO_UNKNOWN_OFFSET,"invalid value length or offset","unrecognized field"}
     };
     for(unsigned i=0;i<sizeof(bad_sfo)/sizeof(bad_sfo[0]);i++) {
         reset();sfo_case=bad_sfo[i].kind;fixture(NULL,0100000,1);

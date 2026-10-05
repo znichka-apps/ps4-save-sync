@@ -97,7 +97,8 @@ static int sfo_check(const unsigned char *p, size_t n, const google_backup *b, u
                 sfo_failure(failure,failure_cap,"duplicate key",field); return 0;
             }
         }
-        if (format==0x204 && (!len || !memchr(v,0,len))) {
+        /* String terminators may follow the declared length within the allocation. */
+        if (format==0x204 && (!len || !memchr(v,0,max))) {
             sfo_failure(failure,failure_cap,"unterminated string value",field); return 0;
         }
         if (!strcmp(key,"TITLE_ID") || !strcmp(key,"SAVEDATA_DIRECTORY")) {
