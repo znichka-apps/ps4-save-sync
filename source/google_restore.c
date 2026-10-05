@@ -253,7 +253,7 @@ static int stage_entries(zip_t *z,google_backup *b,const char *stage,const googl
         char parent[1024]; strcpy(parent,dest); char *slash=strrchr(parent,'/');
         if (!slash) { errno=EINVAL; return stage_error(b,"parent validation"); }
         *slash=0;
-        if (!stage_dirs(save_root,parent+strlen(save_root)+1,b)) return 0;
+        if (strcmp(parent,save_root) && !stage_dirs(save_root,parent+strlen(save_root)+1,b)) return 0;
         int fd=open(dest,O_WRONLY|O_CREAT|O_EXCL|O_NOFOLLOW|O_NONBLOCK,0600);
         if (fd<0) return stage_error(b,"file creation");
         zip_file_t *f=zip_fopen_index(z,i,0); uint64_t total=0; int ok=f!=NULL;

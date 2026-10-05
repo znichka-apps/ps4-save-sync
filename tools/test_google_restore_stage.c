@@ -11,7 +11,7 @@
 #include "google_restore.h"
 
 static google_backup backup;
-static int cancel_after, cancel_calls, absent_calls, target_reject_at, target_status, imports, cleanup_failure;
+static int cancel_after, cancel_calls, absent_calls, target_reject_at, target_status, imports, cleanup_failure, expect_root_file;
 enum { SFO_OK, SFO_SHORT, SFO_MAGIC, SFO_VERSION, SFO_COUNT, SFO_TABLE, SFO_KEY_OFFSET, SFO_INDEX_OFFSET,
     SFO_AGGREGATE, SFO_LONG_KEY, SFO_DUPLICATE,
     SFO_STRING_END, SFO_TITLE_MISMATCH, SFO_DIRECTORY_MISMATCH, SFO_BLOCKS_LOW, SFO_BLOCKS_HIGH,
@@ -111,6 +111,10 @@ static int import_staged(void *p,const google_backup *b,const char *stage) {
     snprintf(path,sizeof(path),"%s/PS4/APOLLO/SAVE/sce_sys/param.sfo",stage);assert(!access(path,R_OK));
     snprintf(path,sizeof(path),"%s/PS4/APOLLO/SAVE/sub/data.bin",stage);
     FILE *f=fopen(path,"rb");assert(f);assert(fread(data,1,7,f)==7&&!fclose(f)&&!strcmp(data,"payload"));
+    if(expect_root_file) {
+        snprintf(path,sizeof(path),"%s/PS4/APOLLO/SAVE/root.bin",stage);
+        f=fopen(path,"rb");assert(f);assert(fread(data,1,3,f)==3&&!fclose(f)&&!strncmp(data,"bad",3));
+    }
     imports++;return 1;
 }
 static int finish(void *p) { (void)p;return !cancelled(NULL); }
@@ -128,7 +132,7 @@ static void clear_tree(const char *p) {
     closedir(d);rmdir(p);
 }
 static void reset(void) {
-    cancel_after=cancel_calls=absent_calls=target_reject_at=imports=cleanup_failure=0;
+    cancel_after=cancel_calls=absent_calls=target_reject_at=imports=cleanup_failure=expect_root_file=0;
     target_status=1;
     sfo_case=SFO_OK;
     clear_tree(backup.temp_dir);strcpy(backup.temp_dir,GOOGLE_BACKUP_CACHE "drive-XXXXXX");assert(mkdtemp(backup.temp_dir));
@@ -149,6 +153,15 @@ int main(void) {
     assert(first==GOOGLE_UPLOAD_SUCCESS);
     assert(imports==1&&absent_calls==2&&access(backup.archive,F_OK)==0);
     assert(access("build/host/cache/no-such-stage",F_OK));
+
+    /* A file directly below the archive root needs no new parent directory.
+       Creating one from bytes past the parent's terminator occupies the file
+       path and makes the exclusive open fail with EEXIST. */
+    reset();expect_root_file=1;fixture("SAVE/root.bin",0100000,1);
+    assert(google_restore_run(&backup,&io)==GOOGLE_UPLOAD_SUCCESS&&imports==1);
+    assert(access(backup.archive,F_OK)==0);
+    char root_stage[320];snprintf(root_stage,sizeof(root_stage),"%s/stage",backup.temp_dir);
+    assert(access(root_stage,F_OK)!=0);
 
     /* A max-sized but supported allocation is accepted. The following cases
        each pin one fixed, content-free diagnostic check and SFO field. */
