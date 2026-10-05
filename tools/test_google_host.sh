@@ -39,44 +39,11 @@ cc -std=gnu11 -Wall -Wextra -Werror -Wno-deprecated-declarations -fsanitize=addr
   source/google_download.c source/google_backup.c source/cJSON.c -lzip -lcurl -lmbedcrypto -o build/host/test_google_download
 build/host/test_google_download
 
-for platform in host ps4; do
-platform_flag=''
-compat_source=''
-compat_wrap=''
-if [ "$platform" = ps4 ]; then
-  platform_flag='-D__PS4__'
-  compat_source='tools/restore_sdk_mock.c'
-  compat_wrap='-Wl,--wrap=lstat,--wrap=fstatat,--wrap=mkdirat'
-fi
 cc -std=gnu11 -Wall -Wextra -Werror -Wno-deprecated-declarations -fsanitize=address,undefined -g \
-  -DGOOGLE_BACKUP_CACHE='"build/host/cache/"' -Itools/restore_host_include -Iinclude \
-  $platform_flag $compat_source tools/test_google_restore.c source/google_restore.c source/save_target.c source/restore_fs.c \
-  source/google_download.c source/google_backup.c source/cJSON.c -lzip -lcurl -lmbedcrypto -lsqlite3 \
-  $compat_wrap -Wl,--wrap=write,--wrap=fstat,--wrap=ftruncate,--wrap=openat,--wrap=fsync,--wrap=zip_fdopen -o build/host/test_google_restore_$platform
-build/host/test_google_restore_$platform
-done
-
-# Explicitly labeled diagnostic build: probes only a no-follow-verified private
-# archive and returns before any save-target check, mount, or extraction.
-cc -std=gnu11 -Wall -Wextra -Werror -Wno-deprecated-declarations -fsanitize=address,undefined -g \
-  -DGOOGLE_RESTORE_OPENAT_PROBE -DGOOGLE_BACKUP_CACHE='"build/host/cache/"' \
-  -Itools/restore_host_include -Iinclude tools/test_google_restore.c source/google_restore.c \
-  source/save_target.c source/restore_fs.c source/google_download.c source/google_backup.c source/cJSON.c \
-  -lzip -lcurl -lmbedcrypto -lsqlite3 \
-  -Wl,--wrap=write,--wrap=fstat,--wrap=ftruncate,--wrap=openat,--wrap=open,--wrap=fsync,--wrap=zip_fdopen \
-  -o build/host/test_google_restore_probe
-build/host/test_google_restore_probe
-
-# Exercise the same probe under the __PS4__ native-filesystem adapter mocks.
-cc -std=gnu11 -Wall -Wextra -Werror -Wno-deprecated-declarations -fsanitize=address,undefined -g \
-  -D__PS4__ -DGOOGLE_RESTORE_OPENAT_PROBE -DGOOGLE_BACKUP_CACHE='"build/host/cache/"' \
-  -Itools/restore_host_include -Iinclude tools/restore_sdk_mock.c tools/test_google_restore.c \
-  source/google_restore.c source/save_target.c source/restore_fs.c source/google_download.c \
-  source/google_backup.c source/cJSON.c -lzip -lcurl -lmbedcrypto -lsqlite3 \
-  -Wl,--wrap=lstat,--wrap=fstatat,--wrap=mkdirat \
-  -Wl,--wrap=write,--wrap=fstat,--wrap=ftruncate,--wrap=openat,--wrap=open,--wrap=fsync,--wrap=zip_fdopen \
-  -o build/host/test_google_restore_probe_ps4
-build/host/test_google_restore_probe_ps4
+  -DGOOGLE_BACKUP_CACHE='"/tmp/ps4-save-sync-restore-cache/"' -Iinclude tools/test_google_restore_stage.c \
+  source/google_restore.c source/restore_fs.c source/google_download.c source/google_backup.c source/cJSON.c \
+  -lzip -lcurl -lmbedcrypto -Wl,--wrap=rmdir -o build/host/test_google_restore_stage
+build/host/test_google_restore_stage
 
 cc -std=gnu11 -Wall -Wextra -Werror -fsanitize=address,undefined -g \
   -Itools/restore_host_include -Iinclude tools/test_save_create.c -o build/host/test_save_create

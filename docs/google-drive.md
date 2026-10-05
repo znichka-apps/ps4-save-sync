@@ -351,25 +351,29 @@ required ownership/detail fields, and supported save allocation blocks (96 to
 Unsupported SFOs fail without creating a target.
 
 Absence is checked against the current user's save key, PFS volume and savedata
-database. Existing saves, orphan files, stale DB rows or unknown lookup results
-are refused. The mount helper rechecks absence and creates the key and volume
-with exclusive opens, so a racing target is refused rather than truncated.
-The existing Apollo image creation, DB registration and mount pipeline is used.
-Validated ZIP entries are streamed directly into that mount, stripping exactly
-the save-directory root. Directory descriptors and no-follow opens prevent
-symlink traversal; sizes, reads, writes, syncs and closes are checked. Apollo's
-ownership patch is applied with the current local account, user and PSID, then
-those fields/HMAC are verified. Zero local user/account IDs are refused rather
-than leaving foreign ownership. Save detail database writes and unmount results
-must also succeed. The generic Apollo HTTP downloader/extractor is not used.
+database before staging and again immediately before import. Existing saves,
+orphan files, stale DB rows or unknown lookup results are refused. The empty
+mount helper repeats that check while creating the key and volume, so a racing
+target is refused rather than truncated. The archive is streamed into the
+private job directory in Apollo's standard decrypted layout:
+`stage/PS4/APOLLO/<save-directory>/...`. Exactly one validated archive root is
+stripped. No generic ZIP extractor is used. The existing `ReadUsbList` scanner
+must find the staged title and directory before the normal **Copy save game to
+HDD** implementation imports it. That copy path updates save details, patches
+ownership to the current local account, user and PSID, then unmounts. IDs in the
+backup are used only to validate title/save identity; source account and user
+IDs are never trusted. Cancellation or any failure retains the original ZIP;
+partial HDD targets are retained for manual inspection and never reported as a
+successful restore.
 
 Rendering and controller input remain on the main thread. The existing exclusive
 worker serializes save, credential and network phases. Google credentials are
 read/refreshed before the target save mount; no credential mount or HTTP transfer
-runs during extraction/ownership patching. Token handling and verified TLS remain
-unchanged. Cancellation is checked through validation and copy, and again after
-unmount through the atomic success boundary. An accepted cancellation cannot
-report restore success, even when the last write already completed.
+runs during staging or HDD import. Token handling and verified TLS remain
+unchanged. Cancellation is checked during archive validation and staging, around
+the save-list/import operation, and again after unmount through the atomic success
+boundary. An accepted cancellation cannot report restore success, even when the
+last write already completed.
 
 On success the save is unmounted and the download is removed; a private-cache
 cleanup error is reported separately. On failure or in-flight cancellation the

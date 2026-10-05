@@ -11,6 +11,7 @@ typedef struct { char *name,*title_id,*path,*dir_name; uint32_t blocks; uint16_t
 void *open_sqlite_db(const char*);
 int orbis_SaveTargetAbsent(const save_entry_t*,uint32_t);
 int orbis_SaveMountEmpty(const save_entry_t*,uint32_t,char*);
+int orbis_ImportStagedSave(const char*,const char*,const char*,uint32_t,int (*)(void*),void*,int*);
 int orbis_SaveUmount(const char*);
 int orbis_UpdateSaveParams(const save_entry_t*,const char*,const char*,const char*,uint32_t);
 #endif

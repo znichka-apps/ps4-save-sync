@@ -170,7 +170,7 @@ int orbis_SaveMount(const save_entry_t *save, uint32_t mode, char* mount_path)
 }
 int orbis_SaveMountEmpty(const save_entry_t *save, uint32_t user, char* mount_path)
 {
-    return save_mount(save,ORBIS_SAVE_DATA_MOUNT_MODE_RDWR|ORBIS_SAVE_DATA_MOUNT_MODE_CREATE2, mount_path,user,1);
+    return save_mount(save,ORBIS_SAVE_DATA_MOUNT_MODE_RDWR|ORBIS_SAVE_DATA_MOUNT_MODE_CREATE2|ORBIS_SAVE_DATA_MOUNT_MODE_COPY_ICON, mount_path,user,1);
 }
 
 int orbis_UpdateSaveParams(const save_entry_t* save, const char* title, const char* subtitle, const char* details, uint32_t userParam)

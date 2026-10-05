@@ -7,6 +7,7 @@
 #include <errno.h>
 #include <ctype.h>
 #include <sys/stat.h>
+#include <dirent.h>
 #include <zip.h>
 #include <mbedtls/md.h>
 #include "google_restore.h"
@@ -20,131 +21,12 @@ static int same(const struct stat *a, const struct stat *b)
         a->st_mtim.tv_sec==b->st_mtim.tv_sec && a->st_mtim.tv_nsec==b->st_mtim.tv_nsec &&
         a->st_ctim.tv_sec==b->st_ctim.tv_sec && a->st_ctim.tv_nsec==b->st_ctim.tv_nsec;
 }
-#ifdef GOOGLE_RESTORE_OPENAT_PROBE
-/* TEMPORARY CONSOLE DIAGNOSTIC. Compile only an explicitly labeled probe
-   build. It opens the validated private archive read-only, performs no reads,
-   and never enters save validation, mounting, or extraction. */
-static void restore_openat_probe(google_backup *b, int private_fd,
-                                const struct stat *private_stat)
+static int same_directory(const struct stat *a,const struct stat *b)
 {
-    static const int candidates[]={
-        O_RDONLY|O_NOFOLLOW|O_NONBLOCK,
-        O_RDONLY|O_NOFOLLOW,
-        O_RDONLY|O_NONBLOCK,
-        O_RDONLY
-    };
-    /* The variants are diagnostic-only and read-only. The 0700 job directory
-       is exclusive to this worker; native lstat is repeated before each open,
-       and each returned descriptor is fstat-checked and closed before moving on. */
-    struct stat private_path, archive_path, current;
-    int error=0;
-    errno=0;
-    if (restore_fs_lstat(b->temp_dir,&private_path)) error=errno;
-    else if (!same(private_stat,&private_path) || !S_ISDIR(private_path.st_mode) ||
-             (private_path.st_mode&077)) error=EINVAL;
-    errno=0;
-    if (!error && restore_fs_lstat(b->archive,&archive_path)) error=errno;
-    else if (!error && (!S_ISREG(archive_path.st_mode) || archive_path.st_uid!=private_path.st_uid ||
-             archive_path.st_nlink!=1 || archive_path.st_size<0 ||
-             (uint64_t)archive_path.st_size!=b->size)) error=EINVAL;
-    if (error) {
-        snprintf(b->diagnostic,sizeof(b->diagnostic),
-            "TEMP OPENAT PROBE ABORTED: private archive no-follow checks failed errno=%d; no save touched.",error);
-        return;
-    }
-    int used=snprintf(b->diagnostic,sizeof(b->diagnostic),"PROBE pfd=%d;",private_fd);
-    for (unsigned i=0;i<sizeof(candidates)/sizeof(candidates[0]) && used>0 &&
-         (size_t)used<sizeof(b->diagnostic);i++) {
-        errno=0;
-        int archive_stat_error=restore_fs_lstat(b->archive,&current);
-        if (archive_stat_error || !same(&archive_path,&current)) {
-            size_t left=sizeof(b->diagnostic)-(size_t)used;
-            snprintf(b->diagnostic+used,left," abort=archive-changed errno=%d",
-                archive_stat_error?errno:EINVAL);
-            break;
-        }
-        errno=0;
-        int fd=restore_fs_openat(private_fd,"backup.zip",candidates[i],0);
-        int open_error=fd<0?errno:0, stat_error=0, identity_ok=1, identity_error=0, close_error=0;
-        if (fd>=0) {
-            if (fstat(fd,&current)) { identity_ok=0; stat_error=errno; }
-            else if (!same(&archive_path,&current)) { identity_ok=0; identity_error=EINVAL; }
-            if (close(fd)) close_error=errno;
-        }
-        size_t left=sizeof(b->diagnostic)-(size_t)used;
-        int added=snprintf(b->diagnostic+used,left," a%u=0x%x:%d/%d/%d/%d",
-            i,(unsigned)candidates[i],fd,open_error,stat_error?stat_error:identity_error,close_error);
-        if (added<=0 || (size_t)added>=left) break;
-        used+=added;
-        if (!identity_ok || close_error) {
-            left=sizeof(b->diagnostic)-(size_t)used;
-            snprintf(b->diagnostic+used,left," abort=%s:%d",
-                identity_ok?"close-failed":"identity-check-failed",
-                identity_ok?close_error:identity_error);
-            break;
-        }
-    }
-    errno=0;
-    int final_stat_error=restore_fs_lstat(b->archive,&current);
-    if (final_stat_error || !same(&archive_path,&current)) {
-        size_t left=sizeof(b->diagnostic)-strlen(b->diagnostic);
-        snprintf(b->diagnostic+strlen(b->diagnostic),left," archive-after=changed:%d",
-            final_stat_error?errno:EINVAL);
-    }
-
-    /* Compare pathname open against openat, with the same protections. Keep
-       the native no-follow checks on both names on either side of the open. */
-    struct stat dir_before, archive_before, dir_after, archive_after;
-    int dir_before_error=0, archive_before_error=0, dir_after_error=0, archive_after_error=0;
-    errno=0;
-    if (restore_fs_lstat(b->temp_dir,&dir_before)) dir_before_error=errno;
-    else if (!same(private_stat,&dir_before) || !S_ISDIR(dir_before.st_mode) ||
-             (dir_before.st_mode&077)) dir_before_error=EINVAL;
-    errno=0;
-    if (restore_fs_lstat(b->archive,&archive_before)) archive_before_error=errno;
-    else if (!same(&archive_path,&archive_before) || !S_ISREG(archive_before.st_mode) ||
-             archive_before.st_uid!=private_stat->st_uid || archive_before.st_nlink!=1 ||
-             archive_before.st_size<0 || (uint64_t)archive_before.st_size!=b->size)
-        archive_before_error=EINVAL;
-    int path_fd=-1, path_open_error=0, path_stat_error=0, path_identity_error=0, path_close_error=0;
-    if (!dir_before_error && !archive_before_error) {
-        errno=0;
-        path_fd=open(b->archive,O_RDONLY|O_NOFOLLOW|O_NONBLOCK);
-        if (path_fd<0) path_open_error=errno;
-        else {
-            errno=0;
-            if (fstat(path_fd,&current)) path_stat_error=errno;
-            else if (!same(&archive_before,&current) || !S_ISREG(current.st_mode) ||
-                     current.st_uid!=dir_before.st_uid || current.st_nlink!=1)
-                path_identity_error=EINVAL;
-            errno=0;
-            if (close(path_fd)) path_close_error=errno;
-        }
-    } else { path_fd=-2; path_open_error=EINVAL; }
-    errno=0;
-    if (restore_fs_lstat(b->temp_dir,&dir_after)) dir_after_error=errno;
-    else if (!same(private_stat,&dir_after) || !S_ISDIR(dir_after.st_mode) ||
-             (dir_after.st_mode&077)) dir_after_error=EINVAL;
-    errno=0;
-    if (restore_fs_lstat(b->archive,&archive_after)) archive_after_error=errno;
-    else if (!same(&archive_path,&archive_after) || !S_ISREG(archive_after.st_mode) ||
-             archive_after.st_uid!=private_stat->st_uid || archive_after.st_nlink!=1 ||
-             archive_after.st_size<0 || (uint64_t)archive_after.st_size!=b->size)
-        archive_after_error=EINVAL;
-    size_t used_path=strlen(b->diagnostic), left_path=sizeof(b->diagnostic)-used_path;
-    /* Compact result/errno pairs fit the existing UI buffer. -2 means skipped;
-       s includes descriptor metadata/type/identity validation. */
-    snprintf(b->diagnostic+used_path,left_path,
-        " p=0x%x:%d/%d s=%d/%d c=%d/%d d0=%d/%d b0=%d/%d d1=%d/%d b1=%d/%d",
-        (unsigned)(O_RDONLY|O_NOFOLLOW|O_NONBLOCK),path_fd,path_open_error,
-        path_fd<0?-2:(path_stat_error||path_identity_error?-1:0),
-        path_stat_error?path_stat_error:path_identity_error,
-        path_fd<0?-2:(path_close_error?-1:0),path_close_error,
-        dir_before_error?-1:0,dir_before_error,archive_before_error?-1:0,
-        archive_before_error,dir_after_error?-1:0,dir_after_error,
-        archive_after_error?-1:0,archive_after_error);
+    return a->st_dev==b->st_dev && a->st_ino==b->st_ino && a->st_mode==b->st_mode && a->st_uid==b->st_uid;
 }
-#endif
+static int safe_lstat(const char *path,struct stat *st) { return restore_fs_lstat(path,st); }
+
 static int hash_fd(int fd, const google_backup *b, const google_restore_io *io, int *code)
 {
     unsigned char buffer[16384], digest[16]; char hex[33]; uint64_t size=0;
@@ -228,179 +110,188 @@ static int read_sfo(zip_t *z, const google_backup *b, uint32_t *blocks)
     }
     free(p); return ok;
 }
-/* Walk under the mount with directory descriptors; never follow symlinks. */
-static int fs_failure(google_backup *b, int operation, const char *name, int error)
+static int stage_error(google_backup *b,const char *what)
 {
     if (!b->diagnostic[0]) snprintf(b->diagnostic,sizeof(b->diagnostic),
-        "Restore %s failed [op=%d errno=%d]. Partial target retained.",name,operation,error);
-    return -1;
+        "Safe staging %s failed [errno=%d]. Download retained.",what,errno);
+    return 0;
 }
-static int destination(int root, const char *name, int directory, google_backup *b)
+static int remove_tree(const char *path,unsigned depth)
 {
-    char path[1024]; if (!*name || strlen(name)>=sizeof(path)) return -1;
-    strcpy(path,name); int parent=dup(root); if (parent<0) return fs_failure(b,101,"dup directory",errno);
-    char *part=path;
-    while (*part) {
-        char *slash=strchr(part,'/'); if (slash) *slash=0;
-        if (!*part || !strcmp(part,".") || !strcmp(part,"..") || strchr(part,'\\') || strchr(part,':')) break;
-        if (slash || directory) {
-            if (restore_fs_mkdirat(parent,part,0700) && errno!=EEXIST) { fs_failure(b,102,"mkdirat",errno); break; }
-            int next=restore_fs_openat(parent,part,O_RDONLY|O_DIRECTORY|O_NOFOLLOW,0);
-            if (next<0) { fs_failure(b,103,"openat directory (no-follow)",errno); break; }
-            if (close(parent)) { close(next); return -1; }
-            parent=next;
-            if (!slash || !slash[1]) return parent;
-            part=slash+1;
-        } else {
-            int fd=restore_fs_openat(parent,part,O_WRONLY|O_CREAT|O_NOFOLLOW|O_NONBLOCK,0600);
-            struct stat st;
-            if (fd<0) fs_failure(b,104,"openat file (no-follow)",errno);
-            if (fd>=0) {
-                int error=0, operation=105;
-                if (fstat(fd,&st)) error=errno;
-                else if (!S_ISREG(st.st_mode) || st.st_nlink!=1) error=EINVAL;
-                else if (ftruncate(fd,0)) { error=errno; operation=106; }
-                if (error) { fs_failure(b,operation,operation==106?"ftruncate":"fstat/type/link check",error); close(fd); fd=-1; }
-            }
-            if (close(parent)) { if (fd>=0) close(fd); return -1; }
-            return fd;
-        }
+    struct stat st;
+    if (depth>32) { errno=ELOOP; return 0; }
+    if (safe_lstat(path,&st)) return errno==ENOENT;
+    if (!S_ISDIR(st.st_mode)) return unlink(path)==0;
+    DIR *d=opendir(path); if (!d) return 0;
+    int ok=1; struct dirent *e;
+    while ((e=readdir(d))!=NULL) {
+        if (!strcmp(e->d_name,".") || !strcmp(e->d_name,"..")) continue;
+        char child[1024]; int n=snprintf(child,sizeof(child),"%s/%s",path,e->d_name);
+        if (n<0 || (size_t)n>=sizeof(child) || !remove_tree(child,depth+1)) { ok=0; break; }
     }
-    close(parent); return -1;
-}
-static int copy_entries(zip_t *z, google_backup *b, const char *mount, const google_restore_io *io)
-{
-    char path[256]; if (strlen(mount)>=sizeof(path)) return 0;
-    strcpy(path,mount); size_t len=strlen(path);
-    while (len>1 && path[len-1]=='/') path[--len]=0;
-    int root=open(path,O_RDONLY|O_DIRECTORY|O_NOFOLLOW);
-    if (root<0) { fs_failure(b,100,"open mount (no-follow)",errno); return 0; }
-    int ok=1; size_t prefix=strlen(b->directory)+1;
-    zip_int64_t count=zip_get_num_entries(z,0);
-    for (zip_uint64_t i=0;ok && i<(zip_uint64_t)count;i++) {
-        zip_stat_t st;
-        if (io->cancelled(io->data) || zip_stat_index(z,i,0,&st)) { ok=0; break; }
-        if (!st.name || strlen(st.name)<prefix || strncmp(st.name,b->directory,prefix-1) || st.name[prefix-1]!='/') { ok=0; break; }
-        const char *name=st.name+prefix; if (!*name) continue;
-        int dir=name[strlen(name)-1]=='/';
-        int fd=destination(root,name,dir,b); if (fd<0) { ok=0; break; }
-        if (!dir) {
-            zip_file_t *f=zip_fopen_index(z,i,0); uint64_t total=0;
-            unsigned char buffer[16384]; zip_int64_t n=0;
-            if (!f) ok=0;
-            while (ok && (n=zip_fread(f,buffer,sizeof(buffer)))>0) {
-                if (io->cancelled(io->data) || (uint64_t)n>st.size-total) { ok=0; break; }
-                size_t written=0;
-                while (written<(size_t)n) {
-                    ssize_t w=write(fd,buffer+written,n-written);
-                    if (w<0 && errno==EINTR) continue;
-                    if (w<=0) { fs_failure(b,107,"write",w<0?errno:EIO); ok=0; break; }
-                    written+=w;
-                }
-                total+=written;
-            }
-            if (n<0 || total!=st.size) ok=0;
-            if (f && zip_fclose(f)) ok=0;
-            if (fsync(fd)) { fs_failure(b,108,"fsync",errno); ok=0; }
-        }
-        if (close(fd)) { fs_failure(b,109,"close entry",errno); ok=0; }
-    }
-    if (close(root)) { fs_failure(b,110,"close mount",errno); ok=0; }
+    if (closedir(d)) ok=0;
+    if (ok && rmdir(path)) ok=0;
     return ok;
+}
+static int remove_stage(const char *path)
+{
+    if (!path || !*path || strstr(path,"/../") || !strstr(path,"/stage")) { errno=EINVAL; return 0; }
+    return remove_tree(path,0);
+}
+/* The stage root is newly created below the private 0700 download directory.
+   Each component comes from a ZIP name already checked by google_download_zip_fd. */
+static int stage_dirs(const char *root,const char *relative,google_backup *b)
+{
+    char path[1024]; int n=snprintf(path,sizeof(path),"%s/%s",root,relative);
+    if (n<0 || (size_t)n>=sizeof(path)) { errno=ENAMETOOLONG; return stage_error(b,"path validation"); }
+    for (char *p=path+strlen(root)+1; *p; p++) if (*p=='/') {
+        *p=0;
+        if (mkdir(path,0700) && errno!=EEXIST) return stage_error(b,"directory creation");
+        struct stat st;
+        if (safe_lstat(path,&st) || !S_ISDIR(st.st_mode)) { errno=EINVAL; return stage_error(b,"directory type check"); }
+        *p='/';
+    }
+    if (mkdir(path,0700) && errno!=EEXIST) return stage_error(b,"directory creation");
+    struct stat st;
+    if (safe_lstat(path,&st) || !S_ISDIR(st.st_mode)) { errno=EINVAL; return stage_error(b,"directory type check"); }
+    return 1;
+}
+static int stage_entries(zip_t *z,google_backup *b,const char *stage,const google_restore_io *io)
+{
+    char root[512], save_root[768], relative_root[384];
+    int n=snprintf(root,sizeof(root),"%s/PS4/APOLLO",stage);
+    int m=snprintf(relative_root,sizeof(relative_root),"PS4/APOLLO/%s",b->directory);
+    if (n<0 || (size_t)n>=sizeof(root) || m<0 || (size_t)m>=sizeof(relative_root) ||
+        mkdir(stage,0700) || !stage_dirs(stage,relative_root,b))
+        return stage_error(b,"root creation");
+    m=snprintf(save_root,sizeof(save_root),"%s/%s",root,b->directory);
+    if (m<0 || (size_t)m>=sizeof(save_root)) { errno=ENAMETOOLONG; return stage_error(b,"path validation"); }
+    size_t prefix=strlen(b->directory)+1;
+    zip_int64_t count=zip_get_num_entries(z,0);
+    for (zip_uint64_t i=0;i<(zip_uint64_t)count;i++) {
+        zip_stat_t st;
+        if (io->cancelled(io->data)) { errno=ECANCELED; return stage_error(b,"cancellation"); }
+        if (zip_stat_index(z,i,0,&st) || !st.name || strlen(st.name)<prefix ||
+            strncmp(st.name,b->directory,prefix-1) || st.name[prefix-1]!='/') { errno=EINVAL; return stage_error(b,"archive root validation"); }
+        const char *rel=st.name+prefix;
+        if (!*rel) continue;
+        char dest[1024];
+        int directory=rel[strlen(rel)-1]=='/';
+        n=snprintf(dest,sizeof(dest),"%s/%s",save_root,rel);
+        if (n<0 || (size_t)n>=sizeof(dest)) { errno=ENAMETOOLONG; return stage_error(b,"path validation"); }
+        if (directory) {
+            dest[strlen(dest)-1]=0;
+            char parent[1024]; strcpy(parent,dest); char *slash=strrchr(parent,'/');
+            if (!slash) { errno=EINVAL; return stage_error(b,"parent validation"); }
+            *slash=0;
+            if (strcmp(parent,save_root) && !stage_dirs(save_root,parent+strlen(save_root)+1,b)) return 0;
+            if (mkdir(dest,0700) && errno!=EEXIST) return stage_error(b,"directory creation");
+            struct stat ds;
+            if (safe_lstat(dest,&ds) || !S_ISDIR(ds.st_mode)) { errno=EINVAL; return stage_error(b,"directory type check"); }
+            continue;
+        }
+        char parent[1024]; strcpy(parent,dest); char *slash=strrchr(parent,'/');
+        if (!slash) { errno=EINVAL; return stage_error(b,"parent validation"); }
+        *slash=0;
+        if (!stage_dirs(save_root,parent+strlen(save_root)+1,b)) return 0;
+        int fd=open(dest,O_WRONLY|O_CREAT|O_EXCL|O_NOFOLLOW|O_NONBLOCK,0600);
+        if (fd<0) return stage_error(b,"file creation");
+        zip_file_t *f=zip_fopen_index(z,i,0); uint64_t total=0; int ok=f!=NULL;
+        unsigned char buffer[16384]; zip_int64_t bytes=0;
+        while (ok && (bytes=zip_fread(f,buffer,sizeof(buffer)))>0) {
+            if (io->cancelled(io->data) || (uint64_t)bytes>st.size-total) { ok=0; errno=ECANCELED; break; }
+            size_t offset=0;
+            while (offset<(size_t)bytes) {
+                ssize_t w=write(fd,buffer+offset,(size_t)bytes-offset);
+                if (w<0 && errno==EINTR) continue;
+                if (w<=0) { ok=0; if (!errno) errno=EIO; break; }
+                offset+=(size_t)w;
+            }
+            total+=offset;
+        }
+        if (bytes<0 || total!=st.size || (f && zip_fclose(f))) ok=0;
+        if (ok && fsync(fd)) ok=0;
+        int saved=errno;
+        if (close(fd)) ok=0;
+        errno=saved;
+        if (!ok) return stage_error(b,"file write");
+    }
+    return 1;
 }
 int google_restore_run(google_backup *b, const google_restore_io *io)
 {
-    int result=GOOGLE_UPLOAD_FAILED, mounted=0, fd=-1, private_fd=-1, op=1, native=0, zip_error=0; zip_t *z=NULL;
-    uint32_t blocks=0; char mount[256], expected[288]; struct stat before, after, private_stat;
+    int result=GOOGLE_UPLOAD_FAILED, fd=-1, op=1, zip_error=0, native=0, staged=0; zip_t *z=NULL;
+    uint32_t blocks=0; char expected[288], stage[320]; struct stat before, after, private_stat;
     b->diagnostic[0]=0;
-#define FAIL(s) do { int e=errno; snprintf(b->diagnostic,sizeof(b->diagnostic),"%s [op=%d errno=%d native=%d zip=%d]",s,op,e,native,zip_error); goto done; } while (0)
     errno=0;
-    if (!restore_fs_init(&native)) FAIL("Restore filesystem initialization failed; no save written.");
+    if (!restore_fs_init(&native)) {
+        snprintf(b->diagnostic,sizeof(b->diagnostic),"Restore filesystem setup failed [native=%d]. Download retained.",native);
+        return GOOGLE_UPLOAD_FAILED;
+    }
     if (strlen(b->title)!=9 || strncmp(b->title,"CUSA",4) || !*b->directory || strlen(b->directory)>=32 ||
-        !strcmp(b->directory,".") || !strcmp(b->directory,"..")) FAIL("Unsupported title/save directory; no save written.");
-    for (unsigned i=4;i<9;i++) if (!isdigit((unsigned char)b->title[i])) FAIL("Invalid title ID.");
+        !strcmp(b->directory,".") || !strcmp(b->directory,"..")) { errno=EINVAL; goto fail; }
+    for (unsigned i=4;i<9;i++) if (!isdigit((unsigned char)b->title[i])) { errno=EINVAL; goto fail; }
     for (const unsigned char *p=(const unsigned char*)b->directory; *p; p++)
-        if (*p<32 || *p==127 || *p=='/' || *p=='\\' || *p==':') FAIL("Invalid save directory.");
-    /* Only a private download job's fixed basename is accepted. */
+        if (*p<32 || *p==127 || *p=='/' || *p=='\\' || *p==':') { errno=EINVAL; goto fail; }
     if (strncmp(b->temp_dir,GOOGLE_BACKUP_CACHE "drive-",strlen(GOOGLE_BACKUP_CACHE "drive-")) ||
-        strchr(b->temp_dir+strlen(GOOGLE_BACKUP_CACHE),'/')) FAIL("Invalid private archive path.");
+        strchr(b->temp_dir+strlen(GOOGLE_BACKUP_CACHE),'/')) { errno=EINVAL; goto fail; }
     snprintf(expected,sizeof(expected),"%s/backup.zip",b->temp_dir);
-    if (strcmp(expected,b->archive)) FAIL("Invalid private archive path.");
+    if (strcmp(expected,b->archive)) { errno=EINVAL; goto fail; }
     op=2; errno=0;
-    private_fd=open(b->temp_dir,O_RDONLY|O_DIRECTORY|O_NOFOLLOW);
-    if (private_fd<0 || fstat(private_fd,&private_stat) || !S_ISDIR(private_stat.st_mode) ||
-        (private_stat.st_mode&077) || private_stat.st_uid!=geteuid()) FAIL("Invalid private archive directory.");
-#ifdef GOOGLE_RESTORE_OPENAT_PROBE
-    restore_openat_probe(b,private_fd,&private_stat);
-    if (close(private_fd)) {
-        size_t used=strlen(b->diagnostic), left=sizeof(b->diagnostic)-used;
-        snprintf(b->diagnostic+used,left," private-close-failed:%d",errno);
-    }
-    /* A probe build is diagnostic-only and can never continue into restore. */
-    return GOOGLE_UPLOAD_FAILED;
-#endif
+    if (safe_lstat(b->temp_dir,&private_stat) || !S_ISDIR(private_stat.st_mode) ||
+        (private_stat.st_mode&077) || private_stat.st_uid!=geteuid()) { errno=EINVAL; goto fail; }
+    if (safe_lstat(b->archive,&before) || !S_ISREG(before.st_mode) || before.st_uid!=private_stat.st_uid ||
+        before.st_nlink!=1 || before.st_size<0 || (uint64_t)before.st_size!=b->size) { errno=EINVAL; goto fail; }
     op=3; errno=0;
-    fd=restore_fs_openat(private_fd,"backup.zip",O_RDONLY|O_NOFOLLOW|O_NONBLOCK,0);
-    /* Capture syscall errno before formatting or cleanup. Policy failures use
-       explicit EINVAL rather than an errno left behind by a successful call. */
-#define ARCHIVE_FAIL(name, error) do { int e=(error); snprintf(b->diagnostic,sizeof(b->diagnostic), \
-        "Archive unavailable. [op=3 call=%s errno=%d native=%d zip=%d]",name,e,native,zip_error); goto done; } while (0)
-    if (fd<0) ARCHIVE_FAIL("openat",errno);
-    if (fstat(fd,&before)) ARCHIVE_FAIL("fstat",errno);
-    if (!S_ISREG(before.st_mode)) ARCHIVE_FAIL("type",EINVAL);
-    if (before.st_uid!=private_stat.st_uid) ARCHIVE_FAIL("owner",EINVAL);
-    if (before.st_nlink!=1) ARCHIVE_FAIL("link",EINVAL);
-#undef ARCHIVE_FAIL
+    fd=open(b->archive,O_RDONLY|O_NOFOLLOW|O_NONBLOCK);
+    if (fd<0) goto fail;
+    if (fstat(fd,&after) || !same(&before,&after) || !S_ISREG(after.st_mode)) { errno=EINVAL; goto fail; }
     op=4; errno=0;
-    if (!hash_fd(fd,b,io,&native) || !google_download_zip_fd(b,fd,io->cancelled,io->data,&zip_error))
-        FAIL("Archive revalidation failed; no save written.");
-    op=5; errno=0;
-    if (fstat(fd,&after) || !same(&before,&after) || restore_fs_lstat(b->archive,&after) ||
-        !same(&before,&after) || restore_fs_lstat(b->temp_dir,&after) ||
-        private_stat.st_dev!=after.st_dev || private_stat.st_ino!=after.st_ino ||
-        private_stat.st_mode!=after.st_mode || private_stat.st_uid!=after.st_uid ||
-        !S_ISDIR(after.st_mode)) FAIL("Archive changed; no save written.");
-    op=6; errno=0; int zipfd=dup(fd);
-    if (zipfd<0) FAIL("Archive unavailable.");
-    z=zip_fdopen(zipfd,ZIP_RDONLY|ZIP_CHECKCONS,&zip_error);
-    if (!z) { int saved=errno; close(zipfd); errno=saved; FAIL("Archive unavailable."); }
-    op=7; errno=0;
-    if (!read_sfo(z,b,&blocks)) FAIL("SFO invalid or disagrees with selected title/save directory; no save written.");
-    if (io->cancelled(io->data)) goto done;
-    op=8; errno=0; int absent=io->absent(io->data,b);
-    if (absent!=1) FAIL(absent==0?"Save already exists for this PS4 user. Restore refused; never overwritten.":"Cannot confirm empty target; restore refused.");
-    if (io->cancelled(io->data)) goto done;
-    op=9; errno=0;
-    if (!io->create_mount(io->data,b,blocks,mount,sizeof(mount))) FAIL("Create/mount failed. A partial target may remain; inspect it manually.");
-    mounted=1;
-    op=10; errno=0;
-    if (!copy_entries(z,b,mount,io)) {
-        if (!b->diagnostic[0]) FAIL("Copy failed or cancelled. Partial target retained for manual review.");
-        goto done;
+    if (!hash_fd(fd,b,io,&zip_error) || !google_download_zip_fd(b,fd,io->cancelled,io->data,&zip_error)) {
+        if (io->cancelled(io->data)) { result=GOOGLE_UPLOAD_CANCELLED; goto done; }
+        goto fail;
     }
-    if (io->cancelled(io->data)) goto done;
-    op=11; errno=0;
-    if (!io->ownership(io->data,mount)) FAIL("Ownership patch failed. Partial target retained for manual review.");
-    if (io->cancelled(io->data)) goto done;
-    op=12; errno=0;
-    if (!io->details(io->data,b,mount)) FAIL("Save metadata update failed. Partial target retained for manual review.");
+    op=5; errno=0;
+    struct stat path_after, dir_after;
+    if (fstat(fd,&after) || !same(&before,&after) || safe_lstat(b->archive,&path_after) || !same(&before,&path_after) ||
+        safe_lstat(b->temp_dir,&dir_after) || !same(&private_stat,&dir_after) || !S_ISDIR(dir_after.st_mode)) { errno=EINVAL; goto fail; }
+    op=6; errno=0; int zipfd=dup(fd);
+    if (zipfd<0) goto fail;
+    z=zip_fdopen(zipfd,ZIP_RDONLY|ZIP_CHECKCONS,&zip_error);
+    if (!z) { close(zipfd); goto fail; }
+    op=7; errno=0;
+    if (!read_sfo(z,b,&blocks)) { errno=EINVAL; goto fail; }
+    if (io->cancelled(io->data)) { result=GOOGLE_UPLOAD_CANCELLED; goto done; }
+    op=8;
+    if (io->absent(io->data,b)!=1) { errno=EEXIST; goto fail; }
+    if (io->cancelled(io->data)) { result=GOOGLE_UPLOAD_CANCELLED; goto done; }
+    snprintf(stage,sizeof(stage),"%s/stage",b->temp_dir);
+    staged=1;
+    if (!stage_entries(z,b,stage,io)) {
+        if (io->cancelled(io->data)) { result=GOOGLE_UPLOAD_CANCELLED; goto done; }
+        goto fail;
+    }
+    if (io->cancelled(io->data)) { result=GOOGLE_UPLOAD_CANCELLED; goto done; }
+    op=9; errno=0;
+    if (safe_lstat(b->archive,&path_after) || !same(&before,&path_after) || fstat(fd,&after) || !same(&before,&after) ||
+        safe_lstat(b->temp_dir,&dir_after) || !same_directory(&private_stat,&dir_after) ||
+        safe_lstat(stage,&dir_after) || !S_ISDIR(dir_after.st_mode) || (dir_after.st_mode&077)) { errno=EINVAL; goto fail; }
+    if (io->absent(io->data,b)!=1) { errno=EEXIST; goto fail; }
+    if (io->cancelled(io->data)) { result=GOOGLE_UPLOAD_CANCELLED; goto done; }
+    op=10;
+    if (!io->import_staged(io->data,b,stage)) {
+        if (io->cancelled(io->data)) { result=GOOGLE_UPLOAD_CANCELLED; goto done; }
+        goto fail;
+    }
     result=GOOGLE_UPLOAD_SUCCESS;
 done:
-    if (mounted && !io->unmount(io->data)) {
-        b->mount_blocked=1; result=GOOGLE_UPLOAD_FAILED;
-        snprintf(b->diagnostic,sizeof(b->diagnostic),"Unmount failed [op=13 errno=%d]. Restart the app; target retained. Restore NOT successful.",errno);
-    }
-    if (!b->mount_blocked && io->cancelled(io->data)) {
-        result=GOOGLE_UPLOAD_CANCELLED;
-        snprintf(b->diagnostic,sizeof(b->diagnostic),"Restore cancelled.%s",mounted?" Partial target retained; inspect manually.":" No target created.");
-    }
-    if (result==GOOGLE_UPLOAD_SUCCESS && !io->finish(io->data)) {
-        result=GOOGLE_UPLOAD_CANCELLED;
-        snprintf(b->diagnostic,sizeof(b->diagnostic),"Restore cancelled at completion. Target retained; inspect manually.");
-    }
+    if (staged && !remove_stage(stage)) { result=GOOGLE_UPLOAD_FAILED; if (!b->diagnostic[0]) snprintf(b->diagnostic,sizeof(b->diagnostic),"Staging cleanup failed [errno=%d]. Download retained.",errno); }
+    if (result==GOOGLE_UPLOAD_SUCCESS && !io->finish(io->data)) result=GOOGLE_UPLOAD_CANCELLED;
     if (z) zip_discard(z);
-    if (private_fd>=0 && close(private_fd)) { result=GOOGLE_UPLOAD_FAILED; snprintf(b->diagnostic,sizeof(b->diagnostic),"Private directory close failed [op=15 errno=%d]",errno); }
-    if (fd>=0 && close(fd)) { result=GOOGLE_UPLOAD_FAILED; snprintf(b->diagnostic,sizeof(b->diagnostic),"Archive close failed [op=14 errno=%d]; target retained.",errno); }
+    if (fd>=0 && close(fd)) { result=GOOGLE_UPLOAD_FAILED; if (!b->diagnostic[0]) snprintf(b->diagnostic,sizeof(b->diagnostic),"Archive close failed [errno=%d]. Download retained.",errno); }
     return result;
-#undef FAIL
+fail:
+    if (!b->diagnostic[0]) snprintf(b->diagnostic,sizeof(b->diagnostic),"Google restore failed [op=%d errno=%d zip=%d]. Download retained.",op,errno,zip_error);
+    result=GOOGLE_UPLOAD_FAILED;
+    goto done;
 }
