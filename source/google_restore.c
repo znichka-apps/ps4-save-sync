@@ -64,7 +64,7 @@ static void restore_openat_probe(google_backup *b, int private_fd,
             break;
         }
         errno=0;
-        int fd=openat(private_fd,"backup.zip",candidates[i]);
+        int fd=restore_fs_openat(private_fd,"backup.zip",candidates[i],0);
         int open_error=fd<0?errno:0, stat_error=0, identity_ok=1, identity_error=0, close_error=0;
         if (fd>=0) {
             if (fstat(fd,&current)) { identity_ok=0; stat_error=errno; }
@@ -245,14 +245,14 @@ static int destination(int root, const char *name, int directory, google_backup 
         if (!*part || !strcmp(part,".") || !strcmp(part,"..") || strchr(part,'\\') || strchr(part,':')) break;
         if (slash || directory) {
             if (restore_fs_mkdirat(parent,part,0700) && errno!=EEXIST) { fs_failure(b,102,"mkdirat",errno); break; }
-            int next=openat(parent,part,O_RDONLY|O_DIRECTORY|O_NOFOLLOW);
+            int next=restore_fs_openat(parent,part,O_RDONLY|O_DIRECTORY|O_NOFOLLOW,0);
             if (next<0) { fs_failure(b,103,"openat directory (no-follow)",errno); break; }
             if (close(parent)) { close(next); return -1; }
             parent=next;
             if (!slash || !slash[1]) return parent;
             part=slash+1;
         } else {
-            int fd=openat(parent,part,O_WRONLY|O_CREAT|O_NOFOLLOW|O_NONBLOCK,0600);
+            int fd=restore_fs_openat(parent,part,O_WRONLY|O_CREAT|O_NOFOLLOW|O_NONBLOCK,0600);
             struct stat st;
             if (fd<0) fs_failure(b,104,"openat file (no-follow)",errno);
             if (fd>=0) {
@@ -340,7 +340,7 @@ int google_restore_run(google_backup *b, const google_restore_io *io)
     return GOOGLE_UPLOAD_FAILED;
 #endif
     op=3; errno=0;
-    fd=openat(private_fd,"backup.zip",O_RDONLY|O_NOFOLLOW|O_NONBLOCK);
+    fd=restore_fs_openat(private_fd,"backup.zip",O_RDONLY|O_NOFOLLOW|O_NONBLOCK,0);
     /* Capture syscall errno before formatting or cleanup. Policy failures use
        explicit EINVAL rather than an errno left behind by a successful call. */
 #define ARCHIVE_FAIL(name, error) do { int e=(error); snprintf(b->diagnostic,sizeof(b->diagnostic), \

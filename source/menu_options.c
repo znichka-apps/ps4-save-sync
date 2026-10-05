@@ -96,10 +96,14 @@ int google_drive_ui_frame(void)
     if (status.discovery_details[0]) google_text(status.discovery_details, 440);
     if (!status.busy && status.restore_ready) {
         const google_backup *b=&status.restore_backup;
+        const int cross_ok=orbisPadGetConf()->crossButtonOK;
+        const char *restore_button=cross_ok?"Cross":"Circle";
+        const char *discard_button=cross_ok?"Circle":"Cross";
         DrawFormatString(180,660,"Game: %.*s",(int)google_text_prefix(b->game,60),b->game);
         DrawFormatString(180,700,"Title: %s  Save: %s",b->title,b->directory);
         DrawFormatString(180,740,"Backup UTC: %s  Current user: %08x",b->utc,apollo_config.user_id);
-        DrawString(180,820,"Confirm: Restore (empty slot only)  Cancel: discard ZIP");
+        DrawFormatString(180,820,"%s: Restore (empty slot only)  %s: discard ZIP",
+            restore_button,discard_button);
     }
     if (!status.busy && status.browsing) {
         for (unsigned i=0;i<status.backups.count;i++) {

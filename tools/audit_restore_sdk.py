@@ -47,7 +47,7 @@ for symbol in ("_open", "_openat", "_fstat", "ftruncate", "fsync", "dup", "close
                "sceKernelLoadStartModule", "sceKernelOpen", "sceKernelWrite",
                "sceKernelFsync", "sceKernelClose", "mkdir", "access", "unlink", "rmdir"):
     assert re.search(r"\bT " + symbol + r"$", kernel, re.M), symbol
-for symbol in ("lstat", "mkdirat"):
+for symbol in ("lstat", "openat", "mkdirat"):
     assert re.search(r"\bT " + symbol + r"$", kernel_sys, re.M), symbol
 flags = (sdk / "include/bits/fcntl.h").read_text()
 for name, value in (("O_NOFOLLOW", "0400"), ("O_DIRECTORY", "0400000"), ("O_EXCL", "04000"),
@@ -68,5 +68,5 @@ for call in ("dup(fd_orig)", 'fdopen(fd, "rb")', "zip_source_filep_create", "zip
 stdio = (libzip / "lib/zip_source_file_stdio.c").read_text()
 for call in ("fstat(fileno", "fseeko(", "fread(", "fclose("):
     assert call in stdio, call
-print("CI kernel exports, BSD no-follow/exclusive flags, and libzip descriptor dependencies verified.")
+print("CI libkernel_sys exports native lstat/openat/mkdirat; BSD no-follow/exclusive flags and libzip descriptor dependencies verified.")
 print("Import libraries describe firmware exports; on-console behavior still requires a console smoke test.")

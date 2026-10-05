@@ -195,10 +195,10 @@ int main(void) {
 #ifdef __PS4__
     extern int sdk_failure, sdk_stub_calls, sdk_native_calls;
     google_restore_io initial_io={NULL,cancel,absent,mount_new,ownership,details,unmount,finish};
-    for (sdk_failure=1;sdk_failure<=6;sdk_failure++) {
+    for (sdk_failure=1;sdk_failure<=7;sdk_failure++) {
         assert(google_restore_run(&backup,&initial_io)==GOOGLE_UPLOAD_FAILED);
         assert(!mounts && !writes && strstr(backup.diagnostic,"op=1") && strstr(backup.diagnostic,"errno="));
-        assert(strstr(backup.diagnostic,sdk_failure==1?"native=-1234":sdk_failure==4?"native=0":sdk_failure>=5?"native=-9012":"native=-5678"));
+        assert(strstr(backup.diagnostic,sdk_failure==1?"native=-1234":sdk_failure==4?"native=0":sdk_failure>=5 && sdk_failure<=6?"native=-9012":"native=-5678"));
     }
     sdk_failure=0;
 #endif
