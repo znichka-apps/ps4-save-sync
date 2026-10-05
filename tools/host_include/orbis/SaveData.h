@@ -7,6 +7,7 @@
 #define ORBIS_SAVE_DATA_MOUNT_MODE_RDONLY 1
 #define ORBIS_SAVE_DATA_DIRNAME_DATA_MAXSIZE 32
 #define ORBIS_SAVE_DATA_MOUNT_MODE_CREATE2 32
+#define ORBIS_SAVE_DATA_MOUNT_MODE_COPY_ICON 64
 typedef struct { char data[32]; } OrbisSaveDataDirName;
 typedef struct { char data[16]; } OrbisSaveDataMountPoint;
 typedef struct {

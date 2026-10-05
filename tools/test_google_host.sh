@@ -49,6 +49,12 @@ cc -std=gnu11 -Wall -Wextra -Werror -fsanitize=address,undefined -g \
   -Itools/restore_host_include -Iinclude tools/test_save_create.c -o build/host/test_save_create
 build/host/test_save_create
 
+cc -std=gnu11 -Wall -Wextra -Werror -fsanitize=address,undefined -g -D__PS4__ \
+  -Itools/restore_host_include -Itools/host_include -Iinclude \
+  tools/test_save_mount_ps4.c source/save_mount.c source/restore_fs.c tools/restore_sdk_mock.c \
+  -lsqlite3 -Wl,--wrap=lstat,--wrap=fstatat,--wrap=mkdirat -o build/host/test_save_mount_ps4
+build/host/test_save_mount_ps4
+
 cc -std=gnu11 -Wall -Wextra -Werror -fsanitize=address,undefined -g \
   -Itools/restore_host_include -Iinclude tools/test_google_restore_ps4.c -lmbedcrypto \
   -o build/host/test_google_restore_ps4
