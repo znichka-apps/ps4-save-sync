@@ -15,7 +15,9 @@ static int cancel_after, cancel_calls, absent_calls, target_race, imports, clean
 enum { SFO_OK, SFO_SHORT, SFO_MAGIC, SFO_VERSION, SFO_COUNT, SFO_TABLE, SFO_KEY_OFFSET, SFO_INDEX_OFFSET,
     SFO_AGGREGATE, SFO_LONG_KEY, SFO_DUPLICATE,
     SFO_STRING_END, SFO_TITLE_MISMATCH, SFO_DIRECTORY_MISMATCH, SFO_BLOCKS_LOW, SFO_BLOCKS_HIGH,
-    SFO_TITLE_FORMAT, SFO_BLOCKS_FORMAT, SFO_ACCOUNT_SIZE, SFO_PARAMS_SIZE, SFO_PARAMS_TITLE,
+    SFO_BLOCKS_UPPER, SFO_TITLE_FORMAT, SFO_BLOCKS_FORMAT, SFO_BLOCKS_SHORT,
+    SFO_BLOCKS_LONG, SFO_BLOCKS_MAX_MISMATCH, SFO_BLOCKS_VALUE_BOUNDS,
+    SFO_ACCOUNT_SIZE, SFO_PARAMS_SIZE, SFO_PARAMS_TITLE,
     SFO_DETAIL_FORMAT, SFO_LIST_FORMAT, SFO_MISSING_LIST_PARAM,
     SFO_BLOCKS_MAX_VALID, SFO_FORMAT_TERMINATOR_IN_MAX, SFO_FORMAT_NO_TERMINATOR,
     SFO_FORMAT_MAX_BOUNDS, SFO_UNKNOWN_LENGTH, SFO_UNKNOWN_OFFSET };
@@ -33,7 +35,7 @@ static void make_sfo(void) {
     for(unsigned i=0;i<9;i++) {
         unsigned char *e=sfo+20+i*16; unsigned len=4,format=0x404;
         if(i==0||i==1||(i>=5&&i<=7)){len=strlen(i==0?"CUSA12345":i==1?"SAVE":"Fixture")+1;format=0x204;}
-        if(i==3){len=8;format=4;} if(i==4){len=0x400;format=4;}
+        if(i==2||i==3){len=8;format=4;} if(i==4){len=0x400;format=4;}
         put16(e,k);put16(e+2,format);put32(e+4,len);put32(e+8,len);put32(e+12,v);
         strcpy((char*)sfo+keyoff+k,keys[i]);k+=strlen(keys[i])+1;
         if(format==0x204)strcpy((char*)sfo+dataoff+v,i==0?"CUSA12345":i==1?"SAVE":"Fixture");
@@ -65,10 +67,15 @@ static void make_sfo(void) {
         case SFO_DIRECTORY_MISMATCH: strcpy((char*)sfo+dataoff+10,"MINE"); break;
         case SFO_BLOCKS_LOW: put32(sfo+dataoff+15,95); break;
         case SFO_BLOCKS_HIGH: put32(sfo+dataoff+15,524289); break;
-        case SFO_BLOCKS_FORMAT: put16(sfo+20+2*16+2,0x204); break;
+        case SFO_BLOCKS_UPPER: put32(sfo+dataoff+15+4,1); break;
+        case SFO_BLOCKS_FORMAT: put16(sfo+20+2*16+2,0x404); break;
+        case SFO_BLOCKS_SHORT: put32(sfo+20+2*16+4,4); put32(sfo+20+2*16+8,4); break;
+        case SFO_BLOCKS_LONG: put32(sfo+20+2*16+4,12); put32(sfo+20+2*16+8,12); break;
+        case SFO_BLOCKS_MAX_MISMATCH: put32(sfo+20+2*16+8,12); break;
+        case SFO_BLOCKS_VALUE_BOUNDS: put32(sfo+20+2*16+12,v-4); break;
         case SFO_ACCOUNT_SIZE: put32(sfo+20+3*16+4,7); put32(sfo+20+3*16+8,7); break;
         case SFO_PARAMS_SIZE: put32(sfo+20+4*16+4,0x53); put32(sfo+20+4*16+8,0x53); break;
-        case SFO_PARAMS_TITLE: strcpy((char*)sfo+dataoff+27+0x2c,"CUSA99999"); break;
+        case SFO_PARAMS_TITLE: strcpy((char*)sfo+dataoff+31+0x2c,"CUSA99999"); break;
         case SFO_DETAIL_FORMAT: put16(sfo+20+7*16+2,0x404); break;
         case SFO_LIST_FORMAT: put16(sfo+20+8*16+2,0x204); break;
         case SFO_MISSING_LIST_PARAM: sfo[keyoff+strlen("TITLE_ID")+1+strlen("SAVEDATA_DIRECTORY")+1+strlen("SAVEDATA_BLOCKS")+1+strlen("ACCOUNT_ID")+1+strlen("PARAMS")+1+strlen("MAINTITLE")+1+strlen("SUBTITLE")+1+strlen("DETAIL")+1]='X'; break;
@@ -166,7 +173,13 @@ int main(void) {
         {SFO_DIRECTORY_MISMATCH,"does not match selected backup","SAVEDATA_DIRECTORY"},
         {SFO_BLOCKS_LOW,"block count outside supported range","SAVEDATA_BLOCKS"},
         {SFO_BLOCKS_HIGH,"block count outside supported range","SAVEDATA_BLOCKS"},
-        {SFO_BLOCKS_FORMAT,"expected 4-byte integer","SAVEDATA_BLOCKS"},
+        /* Structurally valid uint64_t: its upper half must not be discarded. */
+        {SFO_BLOCKS_UPPER,"block count outside supported range","SAVEDATA_BLOCKS"},
+        {SFO_BLOCKS_FORMAT,"expected 8-byte integer","SAVEDATA_BLOCKS"},
+        {SFO_BLOCKS_SHORT,"expected 8-byte integer","SAVEDATA_BLOCKS"},
+        {SFO_BLOCKS_LONG,"expected 8-byte integer","SAVEDATA_BLOCKS"},
+        {SFO_BLOCKS_MAX_MISMATCH,"expected 8-byte integer","SAVEDATA_BLOCKS"},
+        {SFO_BLOCKS_VALUE_BOUNDS,"invalid value length or offset","SAVEDATA_BLOCKS"},
         {SFO_ACCOUNT_SIZE,"expected 8-byte value","ACCOUNT_ID"},
         {SFO_PARAMS_SIZE,"value shorter than title identity structure","PARAMS"},
         {SFO_PARAMS_TITLE,"embedded title ID does not match selected backup","PARAMS"},

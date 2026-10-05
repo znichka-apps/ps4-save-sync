@@ -51,6 +51,7 @@ static int hash_fd(int fd, const google_backup *b, const google_restore_io *io, 
 
 static unsigned le16(const unsigned char *p) { return p[0] | (unsigned)p[1]<<8; }
 static uint32_t le32(const unsigned char *p) { return le16(p) | (uint32_t)le16(p+2)<<16; }
+static uint64_t le64(const unsigned char *p) { return le32(p) | (uint64_t)le32(p+4)<<32; }
 static void sfo_failure(char *out, size_t cap, const char *check, const char *field)
 {
     if (out && cap) snprintf(out,cap,"SFO check=%s field=%s",check,field);
@@ -63,7 +64,7 @@ static const char *sfo_field(const char *key)
     return "unrecognized field";
 }
 /* Bound every index before Apollo's SFO parser/patcher sees these bytes. */
-static int sfo_check(const unsigned char *p, size_t n, const google_backup *b, uint32_t *blocks,
+static int sfo_check(const unsigned char *p, size_t n, const google_backup *b,
     char *failure, size_t failure_cap)
 {
     if (n<20) { sfo_failure(failure,failure_cap,"header too short","SFO header"); return 0; }
@@ -109,10 +110,10 @@ static int sfo_check(const unsigned char *p, size_t n, const google_backup *b, u
             }
             found|=!strcmp(key,"TITLE_ID")?1:2;
         } else if (!strcmp(key,"SAVEDATA_BLOCKS")) {
-            if (format!=0x404 || len!=4 || max!=4) { sfo_failure(failure,failure_cap,"expected 4-byte integer",field); return 0; }
-            *blocks=le32(v);
+            if (format!=0x0004 || len!=8 || max!=8) { sfo_failure(failure,failure_cap,"expected 8-byte integer",field); return 0; }
+            uint64_t blocks=le64(v);
             /* PS4 save blocks are 32 KiB. Bound untrusted allocation requests. */
-            if (*blocks<96 || *blocks>524288) { sfo_failure(failure,failure_cap,"block count outside supported range",field); return 0; }
+            if (blocks<96 || blocks>524288) { sfo_failure(failure,failure_cap,"block count outside supported range",field); return 0; }
             found|=4;
         } else if (!strcmp(key,"ACCOUNT_ID")) {
             if (len!=8 || max!=8) { sfo_failure(failure,failure_cap,"expected 8-byte value",field); return 0; }
@@ -141,7 +142,7 @@ static int sfo_check(const unsigned char *p, size_t n, const google_backup *b, u
     }
     return 1;
 }
-static int read_sfo(zip_t *z, const google_backup *b, uint32_t *blocks, char *failure, size_t failure_cap)
+static int read_sfo(zip_t *z, const google_backup *b, char *failure, size_t failure_cap)
 {
     char name[128]; snprintf(name,sizeof(name),"%s/sce_sys/param.sfo",b->directory);
     zip_stat_t st;
@@ -153,7 +154,7 @@ static int read_sfo(zip_t *z, const google_backup *b, uint32_t *blocks, char *fa
     if (f) {
         zip_int64_t bytes=zip_fread(f,p,st.size);
         if (bytes!=(zip_int64_t)st.size) sfo_failure(failure,failure_cap,"ZIP entry read failed or was truncated","param.sfo");
-        else ok=sfo_check(p,st.size,b,blocks,failure,failure_cap);
+        else ok=sfo_check(p,st.size,b,failure,failure_cap);
         if (zip_fclose(f)) { ok=0; sfo_failure(failure,failure_cap,"ZIP entry close/CRC check failed","param.sfo"); }
     }
     free(p); return ok;
@@ -269,7 +270,7 @@ static int stage_entries(zip_t *z,google_backup *b,const char *stage,const googl
 int google_restore_run(google_backup *b, const google_restore_io *io)
 {
     int result=GOOGLE_UPLOAD_FAILED, fd=-1, op=1, zip_error=0, native=0, staged=0; zip_t *z=NULL;
-    uint32_t blocks=0; char expected[288], stage[320]; struct stat before, after, private_stat;
+    char expected[288], stage[320]; struct stat before, after, private_stat;
     b->diagnostic[0]=0;
     errno=0;
     if (!restore_fs_init(&native)) {
@@ -309,7 +310,7 @@ int google_restore_run(google_backup *b, const google_restore_io *io)
     if (!z) { close(zipfd); goto fail; }
     op=7; errno=0;
     char sfo_diagnostic[160]={0};
-    if (!read_sfo(z,b,&blocks,sfo_diagnostic,sizeof(sfo_diagnostic))) {
+    if (!read_sfo(z,b,sfo_diagnostic,sizeof(sfo_diagnostic))) {
         errno=EINVAL;
         snprintf(b->diagnostic,sizeof(b->diagnostic),"Google restore failed [op=7 errno=%d zip=%d]: %.96s. Download retained.",errno,zip_error,
             sfo_diagnostic[0]?sfo_diagnostic:"SFO validation failed [field=param.sfo]");
