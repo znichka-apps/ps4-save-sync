@@ -50,8 +50,17 @@ for symbol in ("_open", "_openat", "_fstat", "ftruncate", "fsync", "dup", "close
 for symbol in ("lstat", "mkdirat"):
     assert re.search(r"\bT " + symbol + r"$", kernel_sys, re.M), symbol
 flags = (sdk / "include/bits/fcntl.h").read_text()
-for name, value in (("O_NOFOLLOW", "0400"), ("O_DIRECTORY", "0400000"), ("O_EXCL", "04000")):
+for name, value in (("O_NOFOLLOW", "0400"), ("O_DIRECTORY", "0400000"), ("O_EXCL", "04000"),
+                    ("O_NONBLOCK", "04"), ("O_CREAT", "01000")):
     assert re.search(r"#define\s+" + name + r"\s+" + value + r"\b", flags), name
+    print(f"CI SDK {name}: {value} (octal)")
+# Actual x86-64 wrapper tests O_CREAT (bit 9), supplies mode=0 otherwise,
+# and leaves the flags argument in edx unchanged for _openat.
+openat = body("openat")
+assert re.search(r"bt\s+\$0x9,%edx", openat)
+assert re.search(r"xor\s+%eax,%eax", openat)
+assert not re.search(r",%[er]dx\b", re.sub(r"bt\s+\$0x9,%edx", "", openat)), "openat modifies flags"
+print("CI libc openat: forwards flags unchanged; non-create mode is zero")
 
 fdopen = (libzip / "lib/zip_fdopen.c").read_text()
 for call in ("dup(fd_orig)", 'fdopen(fd, "rb")', "zip_source_filep_create", "zip_open_from_source", "close(fd_orig)"):

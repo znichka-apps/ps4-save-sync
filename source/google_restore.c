@@ -207,8 +207,16 @@ int google_restore_run(google_backup *b, const google_restore_io *io)
         (private_stat.st_mode&077) || private_stat.st_uid!=geteuid()) FAIL("Invalid private archive directory.");
     op=3; errno=0;
     fd=openat(private_fd,"backup.zip",O_RDONLY|O_NOFOLLOW|O_NONBLOCK);
-    if (fd<0 || fstat(fd,&before) || !S_ISREG(before.st_mode) || before.st_uid!=private_stat.st_uid ||
-        before.st_nlink!=1) FAIL("Archive unavailable.");
+    /* Capture syscall errno before formatting or cleanup. Policy failures use
+       explicit EINVAL rather than an errno left behind by a successful call. */
+#define ARCHIVE_FAIL(name, error) do { int e=(error); snprintf(b->diagnostic,sizeof(b->diagnostic), \
+        "Archive unavailable. [op=3 call=%s errno=%d native=%d zip=%d]",name,e,native,zip_error); goto done; } while (0)
+    if (fd<0) ARCHIVE_FAIL("openat",errno);
+    if (fstat(fd,&before)) ARCHIVE_FAIL("fstat",errno);
+    if (!S_ISREG(before.st_mode)) ARCHIVE_FAIL("type",EINVAL);
+    if (before.st_uid!=private_stat.st_uid) ARCHIVE_FAIL("owner",EINVAL);
+    if (before.st_nlink!=1) ARCHIVE_FAIL("link",EINVAL);
+#undef ARCHIVE_FAIL
     op=4; errno=0;
     if (!hash_fd(fd,b,io,&native) || !google_download_zip_fd(b,fd,io->cancelled,io->data,&zip_error))
         FAIL("Archive revalidation failed; no save written.");

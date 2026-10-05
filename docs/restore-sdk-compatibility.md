@@ -42,6 +42,22 @@ python3 tools/audit_restore_sdk.py "$OO_PS4_TOOLCHAIN" oosdk_libraries/libzip-1.
 
 ## Security and diagnostics
 
+Build f871543's `op=3 errno=22` does not distinguish a syscall failure from
+an archive policy rejection. Op 3 now reports fixed `call=openat`, `call=fstat`,
+`call=type`, `call=owner`, or `call=link` names. Syscall errno is captured
+immediately; policy failures explicitly report EINVAL. No paths or archive
+contents are included. Focused host injections assert each exact diagnostic,
+archive retention and zero target creation/writes.
+
+The actual release libc openat disassembly tests O_CREAT bit 9, passes mode zero
+when that bit is absent, and forwards edx (flags) unchanged to `_openat`.
+The SDK defines O_NONBLOCK=04, O_NOFOLLOW=0400 and O_CREAT=01000 (octal).
+These are consistent with the wrapper; the import library is not firmware
+implementation evidence that O_NONBLOCK causes EINVAL. No flag removal,
+pathname fallback or policy relaxation is justified by the reported combined
+diagnostic. Keep the existing call until the split console result identifies
+the failing branch.
+
 The private job directory is opened with O_DIRECTORY/O_NOFOLLOW and checked
 with fstat for owner and no group/other permissions. The fixed `backup.zip` is
 opened relative to that directory, with O_NOFOLLOW/O_NONBLOCK. It must be a

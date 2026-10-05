@@ -80,6 +80,13 @@ int __real_fstat(int,struct stat*);
 int __wrap_fstat(int fd,struct stat *s) {
     if (mode==14 && mounts) { errno=EIO; return -1; }
     int result=__real_fstat(fd,s);
+    if (!result && S_ISREG(s->st_mode) && !mounts) {
+        if (mode==23) { errno=EBADF; return -1; }
+        if (mode==24) s->st_mode=(s->st_mode&~S_IFMT)|S_IFIFO;
+        if (mode==25) s->st_uid++;
+        if (mode==26) s->st_nlink=2;
+        if (mode>=24 && mode<=26) errno=ERANGE; /* Must not leak stale errno. */
+    }
     if (!result && S_ISREG(s->st_mode) && !mounts && ++archive_stats==2 && (mode==18 || mode==19)) {
         char moved[320]; snprintf(moved,sizeof(moved),"%s.moved",mode==18?backup.archive:backup.temp_dir);
         if (mode==18) {
@@ -104,6 +111,10 @@ int __wrap_ftruncate(int fd,off_t size) {
 int __real_openat(int,const char*,int,...);
 int __wrap_openat(int fd,const char *p,int flags,...) {
     assert(flags&O_NOFOLLOW);
+    if (!mounts && !strcmp(p,"backup.zip")) {
+        assert(flags==(O_RDONLY|O_NOFOLLOW|O_NONBLOCK));
+        if (mode==22) { errno=EINVAL; return -1; }
+    }
     mode_t permissions=0;
     if (flags&O_CREAT) { va_list args; va_start(args,flags); permissions=va_arg(args,int); va_end(args); }
     if (mode==16 && mounts) { errno=EIO; return -1; }
@@ -165,6 +176,20 @@ int main(void) {
     char data[17]={0}; FILE *f=fopen("build/host/restore-mount/sub/data.bin","rb"); assert(f);
     assert(fread(data,1,16,f)==16 && !strcmp(data,"restored content")); assert(!fclose(f));
     assert(!access(backup.archive,R_OK)); reset_target();
+    /* Each op=3 branch identifies only a fixed operation and numeric codes.
+       Exact strings also ensure no archive path/content enters diagnostics. */
+    const char *archive_calls[]={"openat","fstat","type","owner","link"};
+    for (int failure=22;failure<=26;failure++) {
+        reset_target(); mode=failure;
+        assert(google_restore_run(&backup,&io)==GOOGLE_UPLOAD_FAILED);
+        char expected[160];
+        snprintf(expected,sizeof(expected),"Archive unavailable. [op=3 call=%s errno=%d native=0 zip=0]",
+            archive_calls[failure-22],failure==23?EBADF:EINVAL);
+        assert(!strcmp(backup.diagnostic,expected));
+        assert(!mounts && !writes && !patches && !details_calls && !unmounts);
+        assert(!access(backup.archive,R_OK));
+    }
+    reset_target();
 #ifdef __PS4__
     extern int sdk_operation_failure;
     for (sdk_operation_failure=1;sdk_operation_failure<=2;sdk_operation_failure++) {
