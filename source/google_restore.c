@@ -11,6 +11,7 @@
 #include <zip.h>
 #include <mbedtls/md.h>
 #include "google_restore.h"
+#include "google_replace.h"
 #include "restore_fs.h"
 
 /* Stable descriptor metadata, including sub-second mutations. */
@@ -278,7 +279,7 @@ static int stage_entries(zip_t *z,google_backup *b,const char *stage,const googl
     }
     return 1;
 }
-int google_restore_run(google_backup *b, const google_restore_io *io)
+static int restore_run(google_backup *b, const google_restore_io *io, int validate_only)
 {
     int result=GOOGLE_UPLOAD_FAILED, fd=-1, op=1, zip_error=0, native=0, staged=0; zip_t *z=NULL;
     char expected[288], stage[320]; struct stat before, after, private_stat;
@@ -293,9 +294,20 @@ int google_restore_run(google_backup *b, const google_restore_io *io)
     for (unsigned i=4;i<9;i++) if (!isdigit((unsigned char)b->title[i])) { errno=EINVAL; goto fail; }
     for (const unsigned char *p=(const unsigned char*)b->directory; *p; p++)
         if (*p<32 || *p==127 || *p=='/' || *p=='\\' || *p==':') { errno=EINVAL; goto fail; }
-    if (strncmp(b->temp_dir,GOOGLE_BACKUP_CACHE "drive-",strlen(GOOGLE_BACKUP_CACHE "drive-")) ||
-        strchr(b->temp_dir+strlen(GOOGLE_BACKUP_CACHE),'/')) { errno=EINVAL; goto fail; }
-    snprintf(expected,sizeof(expected),"%s/backup.zip",b->temp_dir);
+    int download_dir=!strncmp(b->temp_dir,GOOGLE_BACKUP_CACHE "drive-",strlen(GOOGLE_BACKUP_CACHE "drive-")) &&
+        !strchr(b->temp_dir+strlen(GOOGLE_BACKUP_CACHE),'/');
+    int replace_dir=!strncmp(b->temp_dir,GOOGLE_REPLACE_ROOT "tx-",strlen(GOOGLE_REPLACE_ROOT "tx-")) &&
+        !strchr(b->temp_dir+strlen(GOOGLE_REPLACE_ROOT),'/');
+    if (!download_dir && !replace_dir) { errno=EINVAL; goto fail; }
+    const char *archive_name="backup.zip";
+    if (replace_dir) {
+        size_t root_len=strlen(b->temp_dir);
+        if (strncmp(b->archive,b->temp_dir,root_len)) { errno=EINVAL; goto fail; }
+        if (!strcmp(b->archive+root_len,"/source.zip")) archive_name="source.zip";
+        else if (!strcmp(b->archive+root_len,"/rollback.zip")) archive_name="rollback.zip";
+        else { errno=EINVAL; goto fail; }
+    }
+    snprintf(expected,sizeof(expected),"%s/%s",b->temp_dir,archive_name);
     if (strcmp(expected,b->archive)) { errno=EINVAL; goto fail; }
     op=2; errno=0;
     if (safe_lstat(b->temp_dir,&private_stat) || !S_ISDIR(private_stat.st_mode) ||
@@ -327,11 +339,21 @@ int google_restore_run(google_backup *b, const google_restore_io *io)
             sfo_diagnostic[0]?sfo_diagnostic:"SFO validation failed [field=param.sfo]");
         goto fail;
     }
+    if (validate_only) { result=GOOGLE_UPLOAD_SUCCESS; goto done; }
     if (io->cancelled(io->data)) { result=GOOGLE_UPLOAD_CANCELLED; goto done; }
     op=8;
     if (!target_absent(b,io,op,zip_error)) goto fail;
     if (io->cancelled(io->data)) { result=GOOGLE_UPLOAD_CANCELLED; goto done; }
-    snprintf(stage,sizeof(stage),"%s/stage",b->temp_dir);
+    snprintf(stage,sizeof(stage),"%s/%s",b->temp_dir,
+        replace_dir?(archive_name[0]=='s'?"stage-source":"stage-rollback"):"stage");
+    if (replace_dir) {
+        struct stat old_stage;
+        if (!safe_lstat(stage,&old_stage)) {
+            if (!S_ISDIR(old_stage.st_mode) || (old_stage.st_mode&077) || !remove_stage(stage)) {
+                errno=EINVAL; goto fail;
+            }
+        } else if (errno!=ENOENT) goto fail;
+    }
     staged=1;
     if (!stage_entries(z,b,stage,io)) {
         if (io->cancelled(io->data)) { result=GOOGLE_UPLOAD_CANCELLED; goto done; }
@@ -352,7 +374,7 @@ int google_restore_run(google_backup *b, const google_restore_io *io)
     result=GOOGLE_UPLOAD_SUCCESS;
 done:
     if (staged && !remove_stage(stage)) { result=GOOGLE_UPLOAD_FAILED; if (!b->diagnostic[0]) snprintf(b->diagnostic,sizeof(b->diagnostic),"Staging cleanup failed [errno=%d]. Download retained.",errno); }
-    if (result==GOOGLE_UPLOAD_SUCCESS && !io->finish(io->data)) result=GOOGLE_UPLOAD_CANCELLED;
+    if (result==GOOGLE_UPLOAD_SUCCESS && !validate_only && !io->finish(io->data)) result=GOOGLE_UPLOAD_CANCELLED;
     if (z) zip_discard(z);
     if (fd>=0 && close(fd)) { result=GOOGLE_UPLOAD_FAILED; if (!b->diagnostic[0]) snprintf(b->diagnostic,sizeof(b->diagnostic),"Archive close failed [errno=%d]. Download retained.",errno); }
     return result;
@@ -360,4 +382,13 @@ fail:
     if (!b->diagnostic[0]) snprintf(b->diagnostic,sizeof(b->diagnostic),"Google restore failed [op=%d errno=%d zip=%d]. Download retained.",op,errno,zip_error);
     result=GOOGLE_UPLOAD_FAILED;
     goto done;
+}
+int google_restore_run(google_backup *b, const google_restore_io *io)
+{
+    return restore_run(b,io,0);
+}
+int google_restore_validate(google_backup *b,int (*cancelled)(void*),void *data)
+{
+    google_restore_io io={.data=data,.cancelled=cancelled};
+    return restore_run(b,&io,1);
 }

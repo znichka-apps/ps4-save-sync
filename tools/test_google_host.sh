@@ -46,6 +46,14 @@ cc -std=gnu11 -Wall -Wextra -Werror -Wno-deprecated-declarations -fsanitize=addr
 build/host/test_google_restore_stage
 
 cc -std=gnu11 -Wall -Wextra -Werror -fsanitize=address,undefined -g \
+  -DGOOGLE_REPLACE_ROOT='"/tmp/ps4-save-sync-replace-test/"' -Iinclude \
+  tools/test_google_replace.c source/google_replace.c -o build/host/test_google_replace
+build/host/test_google_replace
+cc -std=gnu11 -Wall -Wextra -Werror -D__PS4__ \
+  -Itools/restore_host_include -Itools/host_include -Iinclude \
+  -c source/google_replace_ps4.c -o build/host/google_replace_ps4.o
+
+cc -std=gnu11 -Wall -Wextra -Werror -fsanitize=address,undefined -g \
   -Itools/restore_host_include -Iinclude tools/test_save_create.c -o build/host/test_save_create
 build/host/test_save_create
 
@@ -59,3 +67,7 @@ cc -std=gnu11 -Wall -Wextra -Werror -fsanitize=address,undefined -g \
   -Itools/restore_host_include -Iinclude tools/test_google_restore_ps4.c -lmbedcrypto \
   -o build/host/test_google_restore_ps4
 build/host/test_google_restore_ps4
+cc -std=gnu11 -Wall -Wextra -Werror -fsanitize=address,undefined -g -D__PS4__ \
+  -Itools/restore_host_include -Itools/host_include -Iinclude \
+  tools/test_google_replace_ps4.c -o build/host/test_google_replace_ps4
+build/host/test_google_replace_ps4

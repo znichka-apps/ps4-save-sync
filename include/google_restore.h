@@ -11,5 +11,7 @@ typedef struct {
     int (*finish)(void*); /* Atomic cancellation/success boundary after unmount. */
 } google_restore_io;
 int google_restore_run(google_backup*, const google_restore_io*);
+/* Full archive/hash/SFO validation without inspecting or modifying a save. */
+int google_restore_validate(google_backup*, int (*)(void*), void*);
 int google_restore_local(google_backup*, int (*)(void*), int (*)(void*), void*);
 #endif

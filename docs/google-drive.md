@@ -2,8 +2,10 @@
 
 The app connects Google Drive, uploads one selected PS4 HDD save, and browses
 and downloads marked backups into private temporary storage. A verified selected
-backup can now be restored into an empty save slot for the current local PS4
-user, with explicit confirmation. Bulk uploads and automatic sync are not implemented.
+backup can be restored into an empty save slot for the current local PS4 user.
+A separate explicit, best-effort replacement path exists for an occupied slot.
+Replacement is not atomic: power loss can leave the save missing or partial.
+Bulk uploads and automatic sync are not implemented.
 Package identity remains `PSSY00001` /
 `IV0000-PSSY00001_00-PS4SAVESYNC00000`, separate from Apollo. Existing upstream
 credits and licenses remain in place.
@@ -13,9 +15,9 @@ Console testing reported by the owner confirms Google connection, Drive
 The owner also confirmed two separate ZIP uploads of the same save, verified
 the archive contents, and verified the original game save. Those are reported
 console upload results. The owner reports browsing and downloaded-backup
-validation on PS4 as well. The restore milestone has host verification only;
-its PS4 build/runtime and cross-console restore are still unverified. A second
-console is not currently available. No successful cross-console restore is claimed.
+validation on PS4 as well. The owner reports a successful empty-slot restore
+on a second PS4 and that the game loaded it. Replacement and recovery are not
+yet verified on PS4.
 
 ## Build registration
 
@@ -386,6 +388,75 @@ same user, using normal save management after a clean restart. Unmount failure
 blocks further save/credential/network operations until app restart; a failed
 GoogleAuth credential unmount has the same restart requirement. Abrupt
 termination also requires manual inspection and does not imply success.
+
+## Replace an existing save (best effort)
+
+Triangle on a ready Google download opens a separate replacement confirmation.
+The confirmation names the title, save directory and PS4 user and warns that
+power loss can leave the save missing or partial. Cross retains the existing
+empty-slot operation. Replacement is allowed only for a confirmed present
+target and a ZIP whose complete archive, checksum and embedded SFO match that
+title and directory.
+
+Before changing the target, the worker mounts it read-only, creates a rollback
+ZIP, unmounts it, and validates the rollback ZIP. It copies both the selected
+download and rollback ZIP into a private transaction directory at
+`/data/ps4-save-sync/replace/tx-*`, validates those copies, and fsyncs them and
+a versioned journal. It then uploads the rollback ZIP as a new Drive file.
+The upload must return verified file ID, size and MD5; an uncertain upload is
+not enough to proceed. No credential access or HTTP request occurs while a
+game save is mounted. The transaction directory and both ZIPs are retained
+after success and failure; Apollo's ordinary cache cleanup does not remove
+them. They contain decrypted save data and require appropriate local access
+control and available storage.
+
+Only after the rollback upload and a durable journal checkpoint does the
+worker disable cancellation, delete the target with Apollo's save-data delete
+operation, confirm absence, and run the same staged empty-slot import used by
+the working restore path. Success requires a checked unmount and a durable
+completion checkpoint. If delete or import fails, the worker attempts to
+delete any partial target and import the verified rollback ZIP into an empty
+slot. This can also fail. No automatic recursion over save files or direct
+key/volume/database deletion is used.
+
+An interrupted or failed recovery leaves the journal and both ZIPs intact.
+On reopening Google Drive, the panel shows **Recovery pending**; R1 explicitly
+retries rollback from the retained local ZIP without network access. Recovery
+can replace a save that was fully imported just before a power loss but before
+the completion checkpoint. Do not assume either result until the disposable
+save has been inspected and loaded in the game. If the journal cannot be
+validated or a save cannot be unmounted, further Google save operations are
+blocked; restart and investigate the preserved transaction. The OpenOrbis
+backup-related declarations and link stubs do not establish transactional
+firmware behavior, so this path makes no atomicity or guaranteed-recovery claim.
+
+### Disposable-save replacement test on PS4
+
+1. Close the game. Use a disposable save with known old progress on the target
+   console and newer progress in a Drive ZIP from the same title ID and exact
+   save directory. Make and verify an independent USB copy of the old save first.
+2. Download the newer ZIP. Confirm Cross still refuses the occupied slot. Press
+   Triangle, check the title, directory and user in the replacement warning, and
+   decline once; verify the old progress still loads. Repeat and accept.
+3. With development logging or a breakpoint at the delete checkpoint, verify
+   that a new rollback file is already in the marked Drive folder with the
+   expected size and MD5, and that the local `replace/tx-*` directory contains
+   `source.zip`, `rollback.zip` and `journal`. If backup creation, validation,
+   upload or confirmation fails, verify the old save still loads and no
+   delete/import occurred.
+4. On success, check the save is unmounted, launch the game, verify newer
+   progress, and reboot the console to check it again. Verify both ZIPs and the
+   completed journal remain locally, and the rollback file remains on Drive.
+5. With another disposable save, inject a controlled delete or import failure.
+   Verify the app either restores and unmounts the old progress or shows
+   **Recovery pending** with both ZIPs and journal retained. If pending, restart
+   the app, press R1 to retry local rollback, then verify the old progress in
+   game. Repeat with a failed rollback and retry after fixing the fault.
+6. For an interruption test, use only the independently backed-up disposable
+   save. Interrupt during delete/import, reboot, then check for **Recovery
+   pending** and use R1. Recovery can fail or restore old progress after the
+   new data had fully copied; inspect the save and the retained files before
+   any further operation. Never use this test on the only copy of valued data.
 
 ## Safe disposable-save restore test on PS4 (pending)
 

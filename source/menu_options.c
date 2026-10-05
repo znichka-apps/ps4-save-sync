@@ -9,6 +9,7 @@
 #include "libfont.h"
 #include "orbisPad.h"
 #include "google_drive.h"
+#include "google_replace.h"
 
 static int google_panel;
 static unsigned google_selection;
@@ -44,6 +45,10 @@ void google_drive_ui_start(int action)
 {
     google_selection = 0;
     if (!google_drive_start(action, apollo_config.user_id)) {
+        if (google_replace_pending(apollo_config.user_id,NULL)!=0) {
+            google_panel=1;
+            return;
+        }
         show_message("Unable to start Google Drive operation.");
         return;
     }
@@ -53,9 +58,20 @@ void google_drive_ui_start(int action)
 int google_drive_ui_frame(void)
 {
     google_drive_status status;
+    google_backup pending_backup={0};
     if (!google_panel) return 0;
     google_drive_snapshot(&status);
-    if (!status.busy && !status.mount_blocked && status.restore_ready &&
+    int pending=google_replace_pending(apollo_config.user_id,&pending_backup);
+    if (!status.busy && !status.mount_blocked && pending==1 &&
+        orbisPadGetButtonPressed(ORBIS_PAD_BUTTON_R1)) {
+        if (show_dialog(DIALOG_TYPE_YESNO,
+            "Retry best-effort recovery of %s/%s for user %08x?\nThe target may be partial. The retained rollback ZIP will be used. Power loss can still interrupt recovery.",
+            pending_backup.title,pending_backup.directory,apollo_config.user_id) &&
+            !google_drive_start(GOOGLE_RECOVER,apollo_config.user_id))
+            show_message("Unable to start recovery. Journal and ZIPs retained.");
+        return 1;
+    }
+    if (!status.busy && !status.mount_blocked && pending==0 && status.restore_ready &&
         orbisPadGetButtonPressed(ORBIS_PAD_BUTTON_CROSS)) {
         const google_backup *b=&status.restore_backup;
         if (show_dialog(DIALOG_TYPE_YESNO,"Restore into an EMPTY save slot?\nGame: %s\nTitle ID: %s\nSave directory: %s\nBackup UTC: %s\nCurrent PS4 user: %08x\nExisting saves will be refused.",
@@ -63,6 +79,16 @@ int google_drive_ui_frame(void)
             if (!google_drive_start(GOOGLE_RESTORE,apollo_config.user_id)) show_message("Unable to start restore for this PS4 user.");
         } else google_drive_discard_download(apollo_config.user_id);
         /* Do not consume the same confirm/cancel again below this dialog. */
+        return 1;
+    }
+    if (!status.busy && !status.mount_blocked && pending==0 && status.restore_ready &&
+        orbisPadGetButtonPressed(ORBIS_PAD_BUTTON_TRIANGLE)) {
+        const google_backup *b=&status.restore_backup;
+        if (show_dialog(DIALOG_TYPE_YESNO,
+            "REPLACE existing save?\nGame: %s\nTitle ID: %s\nSave directory: %s\nUser: %08x\nA verified rollback will be uploaded first. Replacement is not atomic; power loss can leave the save missing or partial. Recovery is best effort.",
+            b->game,b->title,b->directory,apollo_config.user_id) &&
+            !google_drive_start(GOOGLE_REPLACE,apollo_config.user_id))
+            show_message("Unable to start replacement for this PS4 user.");
         return 1;
     }
     if (!status.busy && status.browsing) {
@@ -78,6 +104,7 @@ int google_drive_ui_frame(void)
         if (status.mount_blocked) { /* Require restart after an unconfirmed unmount. */ }
         else if (status.busy && status.cancellable) google_drive_cancel();
         else if (status.busy) { /* Let atomic credential updates finish. */ }
+        else if (pending==1) google_panel=0;
         else if (status.restore_ready) {
             if (google_drive_discard_download(apollo_config.user_id)) google_panel=0;
         } else google_panel = 0;
@@ -94,7 +121,15 @@ int google_drive_ui_frame(void)
             (unsigned long long)status.completed_bytes, (unsigned long long)status.total_bytes,
             (unsigned)(100.0 * status.completed_bytes / status.total_bytes));
     if (status.discovery_details[0]) google_text(status.discovery_details, 440);
-    if (!status.busy && status.restore_ready) {
+    if (!status.busy && pending==1) {
+        DrawFormatString(180,660,"Recovery pending: %s / %s, user %08x",
+            pending_backup.title,pending_backup.directory,apollo_config.user_id);
+        DrawString(180,720,"Target may be partial. Both ZIPs and journal are retained.");
+        DrawString(180,820,"R1: retry best-effort recovery  Circle: close");
+    } else if (!status.busy && pending<0) {
+        DrawString(180,720,"Replacement journal cannot be verified. Save operations blocked.");
+    }
+    if (!status.busy && pending==0 && status.restore_ready) {
         const google_backup *b=&status.restore_backup;
         const int cross_ok=orbisPadGetConf()->crossButtonOK;
         const char *restore_button=cross_ok?"Cross":"Circle";
@@ -102,7 +137,7 @@ int google_drive_ui_frame(void)
         DrawFormatString(180,660,"Game: %.*s",(int)google_text_prefix(b->game,60),b->game);
         DrawFormatString(180,700,"Title: %s  Save: %s",b->title,b->directory);
         DrawFormatString(180,740,"Backup UTC: %s  Current user: %08x",b->utc,apollo_config.user_id);
-        DrawFormatString(180,820,"%s: Restore (empty slot only)  %s: discard ZIP",
+        DrawFormatString(180,820,"%s: empty slot  Triangle: replace (power-loss risk)  %s: discard",
             restore_button,discard_button);
     }
     if (!status.busy && status.browsing) {

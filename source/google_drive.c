@@ -16,6 +16,7 @@
 #include "google_store.h"
 #include "google_ca.h"
 #include "google_restore.h"
+#include "google_replace.h"
 
 #define SCOPE "https://www.googleapis.com/auth/drive.file"
 #define DISCOVERY_URL "https://accounts.google.com/.well-known/openid-configuration"
@@ -590,12 +591,24 @@ static int worker(void *unused)
     (void)unused;
     int upload_handled = 0;
     int download_handled = 0;
-    char *refresh = calloc(1, TOKEN_CAP), *access = calloc(1, TOKEN_CAP);
+    char *refresh = NULL, *access = NULL;
     long status = 0;
     cJSON *j = NULL;
+    if (current_action == GOOGLE_RECOVER) {
+        int blocked=0;
+        message("Checking retained rollback ZIP and retrying recovery...");
+        int result=google_replace_recover_local(current_user,&blocked);
+        if (blocked) backup.mount_blocked=1;
+        message(result==GOOGLE_REPLACE_ROLLED_BACK?
+            "Recovery complete; prior save unmounted. Both ZIPs retained.":
+            blocked?"Recovery unmount failed. Restart app; journal and ZIPs retained.":
+            "Recovery failed. Target may be partial; journal and both ZIPs retained. Retry after restart.");
+        goto done;
+    }
     if (now() < 0 && current_action != GOOGLE_DISCONNECT) {
         message("Console monotonic clock unavailable. Google operation stopped."); goto done;
     }
+    refresh = calloc(1, TOKEN_CAP); access = calloc(1, TOKEN_CAP);
     if (!refresh || !access) { message("Not enough memory for Google connection."); goto done; }
     if (current_action == GOOGLE_UPLOAD) {
         message("Preparing decrypted ZIP backup...");
@@ -624,21 +637,34 @@ static int worker(void *unused)
         if (!refresh_access(refresh, access)) goto done;
     }
     if (SDL_AtomicGet(&cancelled)) goto done;
-    if (current_action == GOOGLE_RESTORE) {
+    if (current_action == GOOGLE_RESTORE || current_action == GOOGLE_REPLACE) {
         upload_auth auth = {refresh,access};
         google_upload_io io = {&auth,upload_request,upload_refresh,upload_cancelled,upload_progress,upload_wait};
         message("Rechecking selected backup metadata and archive...");
         if (!google_download_recheck(&selected_backup,&io)) {
             message("Backup metadata changed or could not be rechecked. Restore refused; no target written."); goto done;
         }
-        int result=google_restore_local(&selected_backup.backup,upload_cancelled,restore_finish,NULL);
-        if (result==GOOGLE_UPLOAD_SUCCESS) {
+        int result=current_action==GOOGLE_RESTORE?
+            google_restore_local(&selected_backup.backup,upload_cancelled,restore_finish,NULL):
+            google_replace_local(&selected_backup.backup,&io,upload_cancelled,restore_finish,NULL);
+        if (result==(current_action==GOOGLE_REPLACE?GOOGLE_REPLACE_SUCCESS:GOOGLE_UPLOAD_SUCCESS)) {
             selected_ready=0;
-            message(google_backup_cleanup(&selected_backup.backup)?
-                "Restore complete for this PS4 user. Save unmounted successfully.":
-                "Restore complete; save unmounted. Temporary ZIP cleanup failed.");
+            if (current_action==GOOGLE_REPLACE) {
+                message("Replace complete; save unmounted. Journal and both ZIPs retained. Power loss during replacement could still lose progress.");
+                (void)google_backup_cleanup(&selected_backup.backup);
+            } else message(google_backup_cleanup(&selected_backup.backup)?
+                    "Restore complete for this PS4 user. Save unmounted successfully.":
+                    "Restore complete; save unmounted. Temporary ZIP cleanup failed.");
         } else {
-            message(result==GOOGLE_UPLOAD_CANCELLED?"Restore cancelled; NOT successful.":"Restore failed; NOT successful. Downloaded ZIP retained.");
+            if (current_action==GOOGLE_REPLACE)
+                message(result==GOOGLE_REPLACE_ROLLED_BACK?
+                    "Replace failed; prior save restored and unmounted. Journal and ZIPs retained.":
+                    result==GOOGLE_REPLACE_NEEDS_RECOVERY?
+                    "Replace failed; recovery pending. Target may be partial. Journal and ZIPs retained.":
+                    result==GOOGLE_REPLACE_CANCELLED?
+                    "Replace cancelled before target change. Journal and ZIPs retained where created.":
+                    "Replace refused before target change. Check details; ZIPs retained.");
+            else message(result==GOOGLE_UPLOAD_CANCELLED?"Restore cancelled; NOT successful.":"Restore failed; NOT successful. Downloaded ZIP retained.");
             SDL_LockMutex(lock);
             snprintf(state.preparation_details,sizeof(state.preparation_details),"%s",selected_backup.backup.diagnostic);
             SDL_UnlockMutex(lock);
@@ -736,7 +762,7 @@ done:
             SDL_UnlockMutex(lock);
         }
     } else if (SDL_AtomicGet(&cancelled)) {
-        if (current_action != GOOGLE_DOWNLOAD && current_action != GOOGLE_RESTORE) message("Google operation cancelled.");
+        if (current_action != GOOGLE_DOWNLOAD && current_action != GOOGLE_RESTORE && current_action != GOOGLE_REPLACE) message("Google operation cancelled.");
         else if (current_action==GOOGLE_DOWNLOAD && !download_handled) message("Download cancelled before transfer; no temporary backup ready.");
         else if (current_action==GOOGLE_RESTORE && !selected_backup.backup.diagnostic[0]) message("Restore cancelled before writing. Download retained.");
     }
@@ -754,14 +780,18 @@ done:
 
 int google_drive_start(int action, uint32_t user)
 {
-    if (action < GOOGLE_CONNECT || action > GOOGLE_RESTORE) return 0;
+    if (action < GOOGLE_CONNECT || action > GOOGLE_RECOVER) return 0;
     if (!lock) lock = SDL_CreateMutex();
     if (!lock) return 0;
     google_drive_status snapshot;
     google_drive_snapshot(&snapshot);
     if (snapshot.busy || snapshot.mount_blocked) return 0;
-    if (selected_ready && action!=GOOGLE_RESTORE) return 0;
-    if (action==GOOGLE_RESTORE && (!selected_ready || selected_backup.backup.user!=user)) return 0;
+    int pending=google_replace_pending(user,NULL);
+    if (pending<0 || (pending==1 && action!=GOOGLE_RECOVER) ||
+        (action==GOOGLE_RECOVER && pending!=1)) return 0;
+    if (selected_ready && action!=GOOGLE_RESTORE && action!=GOOGLE_REPLACE && action!=GOOGLE_RECOVER) return 0;
+    if ((action==GOOGLE_RESTORE || action==GOOGLE_REPLACE) &&
+        (!selected_ready || selected_backup.backup.user!=user)) return 0;
     if (thread) { SDL_WaitThread(thread, NULL); thread = NULL; }
     if (action == GOOGLE_NEXT) {
         if (browser_user != user || !browser_page.next[0]) return 0;
@@ -771,12 +801,12 @@ int google_drive_start(int action, uint32_t user)
         if (!google_backup_cleanup(&selected_backup.backup)) return 0;
     }
     SDL_AtomicSet(&cancelled, 0);
-    if (action==GOOGLE_RESTORE) selected_backup.backup.diagnostic[0]=0;
+    if (action==GOOGLE_RESTORE || action==GOOGLE_REPLACE) selected_backup.backup.diagnostic[0]=0;
     current_action = action; current_user = user;
     SDL_LockMutex(lock);
     memset(&state, 0, sizeof(state));
     state.busy = 1;
-    state.cancellable = action != GOOGLE_DISCONNECT;
+    state.cancellable = action != GOOGLE_DISCONNECT && action != GOOGLE_RECOVER;
     strcpy(state.message, "Contacting Google...");
     SDL_UnlockMutex(lock);
     thread = SDL_CreateThread(worker, "google_drive", NULL);

@@ -148,6 +148,13 @@ int main(void) {
     google_restore_io io={NULL,cancelled,absent,import_staged,finish};
 
     fixture(NULL,0100000,1);
+    assert(google_restore_validate(&backup,cancelled,NULL)==GOOGLE_UPLOAD_SUCCESS);
+    assert(!imports && !absent_calls && access(backup.archive,F_OK)==0);
+    reset();sfo_case=SFO_DIRECTORY_MISMATCH;fixture(NULL,0100000,1);
+    assert(google_restore_validate(&backup,cancelled,NULL)==GOOGLE_UPLOAD_FAILED);
+    assert(!imports && !absent_calls && access(backup.archive,F_OK)==0);
+    reset();
+    fixture(NULL,0100000,1);
     int first=google_restore_run(&backup,&io);
     if(first!=GOOGLE_UPLOAD_SUCCESS)fprintf(stderr,"restore stage failed: %s\n",backup.diagnostic);
     assert(first==GOOGLE_UPLOAD_SUCCESS);

@@ -17,6 +17,7 @@ size_t strlcpy(char*,const char*,size_t);
 void *open_sqlite_db(const char*);
 int save_sqlite_db(void*,const char*);
 int orbis_SaveTargetAbsent(const save_entry_t*,uint32_t);
+int orbis_SaveDelete(const save_entry_t*);
 int orbis_SaveMountEmpty(const save_entry_t*,uint32_t,char*);
 int orbis_ImportStagedSave(const char*,const char*,const char*,uint32_t,int (*)(void*),void*,int*);
 int orbis_SaveUmount(const char*);

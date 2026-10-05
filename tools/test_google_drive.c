@@ -14,6 +14,7 @@
 #include "google_ca.h"
 #include "google_store.h"
 #include "google_drive.h"
+#include "google_replace.h"
 
 typedef struct {
     const char *url, *form, *ca, *capath;
@@ -224,6 +225,21 @@ int google_restore_local(google_backup *b, int (*cancel)(void*), int (*finish)(v
 {
     (void)b; (void)cancel; (void)finish; (void)data;
     assert(0 && "Unexpected platform restore in transport test"); return GOOGLE_UPLOAD_FAILED;
+}
+int google_replace_pending(uint32_t user, google_backup *source)
+{
+    (void)user; (void)source; return 0;
+}
+int google_replace_local(google_backup *b, const google_upload_io *io,
+                         int (*cancel)(void*), int (*commit)(void*), void *data)
+{
+    (void)b; (void)io; (void)cancel; (void)commit; (void)data;
+    assert(0 && "Unexpected replacement in transport test"); return GOOGLE_REPLACE_FAILED;
+}
+int google_replace_recover_local(uint32_t user, int *blocked)
+{
+    (void)user; (void)blocked;
+    assert(0 && "Unexpected recovery in transport test"); return GOOGLE_REPLACE_FAILED;
 }
 #undef curl_easy_setopt
 #undef curl_easy_getinfo
