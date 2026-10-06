@@ -55,10 +55,10 @@ static int import_staged(void *p,const google_backup *b,const char *stage)
     if (mount_blocked) {
         ((google_backup*)b)->mount_blocked=1;
         snprintf(((google_backup*)b)->diagnostic,sizeof(b->diagnostic),
-            "Save unmount failed after staged import. Restart the app; downloaded ZIP retained.");
+            "Save mount state uncertain after staged import. Stop save operations; ZIP retained.");
     }
     errno=import_error;
-    return ok;
+    return ok && !mount_blocked;
 }
 
 int google_restore_local(google_backup *b,int (*cancelled)(void*),int (*completed)(void*),void *data)

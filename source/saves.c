@@ -20,6 +20,7 @@
 #include "ps1card.h"
 #include "sd.h"
 #include "save_scan_path.h"
+#include "save_unmount.h"
 
 #define UTF8_CHAR_STAR		"\xE2\x98\x85"
 
@@ -69,18 +70,17 @@ int orbis_SaveUmount(const char* mountPath)
 	char mountDir[256];
 
 	snprintf(mountDir, sizeof(mountDir), APOLLO_SANDBOX_PATH, mountPath);
-	int umountErrorCode = umountSave(mountDir, 0, 0);
+	int umountErrorCode = 0;
+	int unmounted = save_unmount_directory(mountDir, &umountErrorCode);
 	int saved_errno = errno;
-	
-	if (umountErrorCode < 0)
+
+	if (!unmounted)
 	{
 		LOG("UMOUNT_ERROR (%X)", umountErrorCode);
 		notify_popup(NOTIFICATION_ICON_BAN, _("Warning! Save couldn't be unmounted!"));
 	}
-
-	rmdir(mountDir);
 	errno = saved_errno;
-	return (umountErrorCode == SUCCESS);
+	return unmounted;
 }
 
 int orbis_UpdateSaveParams(const save_entry_t* save, const char* title, const char* subtitle, const char* details, uint32_t userParam)

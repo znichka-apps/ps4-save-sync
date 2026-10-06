@@ -450,6 +450,10 @@ its errno alone may not identify an inner SDK operation.
 The scan result distinguishes a missing staged `param.sfo` from a scanner match
 failure. Later steps are absent when an earlier step stops the import, except
 that unmount is still attempted after a successful mount.
+If the private SDK mount or unmount call reports failure, its return and POSIX
+`errno` are captured immediately. The mount directory is retained and Replace
+stops before rollback because the firmware mount state cannot be confirmed.
+There is no automatic unmount retry.
 
 ### Disposable-save replacement test on PS4
 

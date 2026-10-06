@@ -11,7 +11,7 @@
 
 app_config_t apollo_config={.user_id=42,.account_id=123};
 extern int sdk_stub_calls, sdk_native_calls, sdk_operation_failure;
-static int absent_result=1, absent_calls, create_calls, mount_calls;
+static int absent_result=1, absent_calls, create_calls, mount_calls, mount_failure;
 static const char *mount_dir="build/host/restore-mount/SAVE/";
 
 size_t strlcpy(char *dst,const char *src,size_t size)
@@ -45,6 +45,7 @@ int mountSave(const char *volume,const char *key,const char *path)
 {
     assert(strstr(volume,"sdimg_SAVE") && strstr(key,"SAVE.bin") && !strcmp(path,mount_dir));
     mount_calls++;
+    if (mount_failure) { errno=ENOENT; return -1234; }
     return 0;
 }
 void *open_sqlite_db(const char *path)
@@ -76,11 +77,19 @@ int main(void)
     assert(orbis_SaveMountEmpty(&save,42,mounted)==0);
     assert(absent_calls==2 && create_calls==1 && mount_calls==1 && sdk_stub_calls==0);
     assert(rmdir(mount_dir)==0);
+    sdk_operation_failure=0; absent_result=1; mount_failure=1;
+    int uncertain=0;
+    struct stat st;
+    errno=0;
+    assert(!orbis_SaveMountEmptyChecked(&save,42,mounted,&uncertain));
+    assert(uncertain && errno==ENOENT && mount_calls==2);
+    assert(!stat(mount_dir,&st) && S_ISDIR(st.st_mode));
+    assert(!rmdir(mount_dir));
 
     sdk_operation_failure=1;
     errno=0;
     assert(orbis_SaveMountEmpty(&save,42,mounted)==0 && errno==ENOSYS);
-    assert(absent_calls==2 && create_calls==1 && mount_calls==1 && sdk_stub_calls==0);
+    assert(absent_calls==3 && create_calls==2 && mount_calls==2 && sdk_stub_calls==0);
     puts("PS4 empty-save mount uses native lstat; present and unknown paths are refused.");
     return 0;
 }

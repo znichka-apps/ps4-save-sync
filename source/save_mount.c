@@ -12,8 +12,10 @@
 #include "sd.h"
 #include "restore_fs.h"
 
-static int save_mount(const save_entry_t *save, uint32_t mount_mode, char* mount_path, uint32_t empty_user, int empty)
+static int save_mount(const save_entry_t *save, uint32_t mount_mode, char* mount_path, uint32_t empty_user, int empty,
+    int *mount_uncertain)
 {
+	if (mount_uncertain) *mount_uncertain=0;
 	if (save->title_id && save->dir_name && !strcmp(save->title_id, "PSSY00001") &&
 		!strcmp(save->dir_name, "GoogleAuth")) return 0;
 	char mountDir[256];
@@ -91,7 +93,8 @@ static int save_mount(const save_entry_t *save, uint32_t mount_mode, char* mount
 	{
 		int saved_errno = errno;
 		LOG("ERROR (%X): can't mount '%s/%s'", mountErrorCode, save->title_id, save->dir_name);
-		rmdir(mountDir);
+		/* The private SDK does not establish that a failed return left no mount. */
+		if (mount_uncertain) *mount_uncertain=1;
 		errno = saved_errno;
 		return 0;
 	}
@@ -104,9 +107,17 @@ static int save_mount(const save_entry_t *save, uint32_t mount_mode, char* mount
 
 int orbis_SaveMount(const save_entry_t *save, uint32_t mode, char* mount_path)
 {
-    return save_mount(save,mode,mount_path,0,0);
+    return save_mount(save,mode,mount_path,0,0,NULL);
 }
 int orbis_SaveMountEmpty(const save_entry_t *save, uint32_t user, char* mount_path)
 {
-    return save_mount(save,ORBIS_SAVE_DATA_MOUNT_MODE_RDWR|ORBIS_SAVE_DATA_MOUNT_MODE_CREATE2|ORBIS_SAVE_DATA_MOUNT_MODE_COPY_ICON, mount_path,user,1);
+    return save_mount(save,ORBIS_SAVE_DATA_MOUNT_MODE_RDWR|ORBIS_SAVE_DATA_MOUNT_MODE_CREATE2|ORBIS_SAVE_DATA_MOUNT_MODE_COPY_ICON, mount_path,user,1,NULL);
+}
+int orbis_SaveMountChecked(const save_entry_t *save, uint32_t mode, char* mount_path, int *mount_uncertain)
+{
+    return save_mount(save,mode,mount_path,0,0,mount_uncertain);
+}
+int orbis_SaveMountEmptyChecked(const save_entry_t *save, uint32_t user, char* mount_path, int *mount_uncertain)
+{
+    return save_mount(save,ORBIS_SAVE_DATA_MOUNT_MODE_RDWR|ORBIS_SAVE_DATA_MOUNT_MODE_CREATE2|ORBIS_SAVE_DATA_MOUNT_MODE_COPY_ICON, mount_path,user,1,mount_uncertain);
 }

@@ -83,7 +83,7 @@ static int import_archive(void *p,google_backup *b,int recovery)
     int result=google_restore_local(b,recovery?never_cancel:cancelled,completed,p);
     b->replace_trace=0;
     if (b->mount_blocked && c->mount_blocked) *c->mount_blocked=1;
-    return result==GOOGLE_UPLOAD_SUCCESS;
+    return result==GOOGLE_UPLOAD_SUCCESS && !b->mount_blocked;
 }
 int google_replace_local(google_backup *b,const google_upload_io *network,
                          int (*cancel)(void *),int (*begin)(void *),void *data)

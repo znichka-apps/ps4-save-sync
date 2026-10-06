@@ -47,8 +47,10 @@ int google_backup_stage(google_backup *b, int (*cancel)(void*), void *data)
     uint32_t trace_user=b->replace_trace?b->user:0;
     if (trace_user) google_replace_phase(trace_user,"rollback mount","before");
 #endif
-    if (!orbis_SaveMount(&save, ORBIS_SAVE_DATA_MOUNT_MODE_RDONLY, mount)) {
+    int mount_uncertain=0;
+    if (!orbis_SaveMountChecked(&save, ORBIS_SAVE_DATA_MOUNT_MODE_RDONLY, mount, &mount_uncertain)) {
         int mount_error=errno;
+        if (mount_uncertain) b->mount_blocked=1;
 #ifdef __PS4__
         if (trace_user) google_replace_phase(trace_user,"rollback mount","after failed");
 #endif

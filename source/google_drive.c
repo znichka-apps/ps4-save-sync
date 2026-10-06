@@ -601,7 +601,7 @@ static int worker(void *unused)
         if (blocked) backup.mount_blocked=1;
         message(result==GOOGLE_REPLACE_ROLLED_BACK?
             "Recovery complete; prior save unmounted. Both ZIPs retained.":
-            blocked?"Recovery unmount failed. Restart app; journal and ZIPs retained.":
+            blocked?"Recovery mount state uncertain. Stop save operations; journal and ZIPs retained.":
             "Recovery failed. Target may be partial; journal and both ZIPs retained. Retry after restart.");
         goto done;
     }
@@ -616,7 +616,7 @@ static int worker(void *unused)
             SDL_LockMutex(lock);
             snprintf(state.preparation_details, sizeof(state.preparation_details), "%s", backup.diagnostic);
             SDL_UnlockMutex(lock);
-            message(backup.mount_blocked ? "Save unmount failed. Restart the app before further save operations." :
+            message(backup.mount_blocked ? "Save mount state uncertain. Stop further save operations." :
                 "Could not prepare backup. Source save was not changed.");
             goto done;
         }

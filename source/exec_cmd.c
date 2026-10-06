@@ -330,12 +330,14 @@ static int _copy_save_hdd(const save_entry_t* save, uint32_t empty_user, int *mo
 	if (mount_blocked) *mount_blocked = 0;
 	if (trace_user) google_replace_phase(trace_user,"target mount","before");
 	errno = 0;
-	int mounted = empty_user ? orbis_SaveMountEmpty(save, empty_user, mount) :
-		orbis_SaveMount(save, ORBIS_SAVE_DATA_MOUNT_MODE_RDWR | ORBIS_SAVE_DATA_MOUNT_MODE_CREATE2 | ORBIS_SAVE_DATA_MOUNT_MODE_COPY_ICON, mount);
+	int uncertain = 0;
+	int mounted = empty_user ? orbis_SaveMountEmptyChecked(save, empty_user, mount, &uncertain) :
+		orbis_SaveMountChecked(save, ORBIS_SAVE_DATA_MOUNT_MODE_RDWR | ORBIS_SAVE_DATA_MOUNT_MODE_CREATE2 | ORBIS_SAVE_DATA_MOUNT_MODE_COPY_ICON, mount, &uncertain);
 	int mount_error = errno;
 	if (trace_user) google_replace_phase(trace_user,"target mount",mounted?"after ok":"after failed");
-	import_step(trace_user,"import mount",mounted,mount_error,"SaveMountEmpty");
+	import_step(trace_user,"import mount",mounted,mount_error,"SaveMountChecked");
 	if (!mounted) {
+		if (uncertain && mount_blocked) *mount_blocked = 1;
 		errno = mount_error;
 		return 0;
 	}

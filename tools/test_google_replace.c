@@ -10,7 +10,7 @@
 
 static google_backup selected;
 static int target, validate_fail, stage_fail, upload_fail, commit_fail, delete_fail;
-static int import_fail, create_fail, rollback_fail, cancel_now, cancel_on_upload;
+static int import_fail, import_mount_fail, import_unmount_fail, create_fail, rollback_fail, cancel_now, cancel_on_upload;
 static int stage_calls, upload_calls, delete_calls, import_calls;
 enum { ABSENT, OLD, NEW, PARTIAL };
 int restore_fs_init(int *error) { *error=0; return 1; }
@@ -75,6 +75,12 @@ static int import_archive(void *unused,google_backup *b,int recovery)
                     !strcmp(phase,"import: before"));
     assert(target==ABSENT);
     if (!recovery && create_fail) return 0;
+    if (!recovery && import_mount_fail) {
+        b->mount_blocked=1; errno=ENOENT; return 0;
+    }
+    if (!recovery && import_unmount_fail) {
+        target=PARTIAL; b->mount_blocked=1; errno=ENOENT; return 0;
+    }
     if ((recovery && rollback_fail) || (!recovery && import_fail)) {
         target=PARTIAL;return 0;
     }
@@ -109,7 +115,7 @@ static void setup(void)
     strcpy(selected.utc,"2026-10-05T00:00:00Z");selected.size=1;selected.user=42;
     FILE *f=fopen(selected.archive,"wb"); assert(f);assert(fputc('S',f)!='\0'&&!fclose(f));
     target=OLD;validate_fail=stage_fail=upload_fail=commit_fail=delete_fail=0;
-    import_fail=create_fail=rollback_fail=cancel_now=cancel_on_upload=0;
+    import_fail=import_mount_fail=import_unmount_fail=create_fail=rollback_fail=cancel_now=cancel_on_upload=0;
     stage_calls=upload_calls=delete_calls=import_calls=0;
 }
 static void assert_retained(void)
@@ -129,6 +135,13 @@ static void assert_phase_contains(const char *expected)
     char content[8192];size_t size=fread(content,1,sizeof(content)-1,f);
     assert(!ferror(f) && !fclose(f));content[size]=0;
     assert(strstr(content,expected));
+}
+static void assert_phase_missing(const char *unexpected)
+{
+    FILE *f=fopen(GOOGLE_REPLACE_ROOT "phase-0000002a.log","rb");assert(f);
+    char content[8192];size_t size=fread(content,1,sizeof(content)-1,f);
+    assert(!ferror(f) && !fclose(f));content[size]=0;
+    assert(!strstr(content,unexpected));
 }
 int main(void)
 {
@@ -161,6 +174,18 @@ int main(void)
     assert_retained();assert(google_replace_pending(42,NULL)==0);
     setup();import_fail=1;
     assert(google_replace_start(&selected,&io)==GOOGLE_REPLACE_ROLLED_BACK && target==OLD && import_calls==2);
+    assert_retained();assert(google_replace_pending(42,NULL)==0);
+    setup();import_mount_fail=1;
+    assert(google_replace_start(&selected,&io)==GOOGLE_REPLACE_NEEDS_RECOVERY);
+    assert(selected.mount_blocked && target==ABSENT && import_calls==1 && delete_calls==1);
+    assert_retained();assert(google_replace_pending(42,NULL)==1);
+    assert_phase_missing("rollback: before");
+    setup();import_unmount_fail=1;
+    assert(google_replace_start(&selected,&io)==GOOGLE_REPLACE_NEEDS_RECOVERY);
+    assert(selected.mount_blocked && target==PARTIAL && import_calls==1 && delete_calls==1);
+    assert_retained();assert(google_replace_pending(42,NULL)==1);
+    assert_phase_contains("import: after failed");
+    assert_phase_missing("rollback: before");
     setup();create_fail=1;
     assert(google_replace_start(&selected,&io)==GOOGLE_REPLACE_ROLLED_BACK && target==OLD && import_calls==2);
     setup();import_fail=rollback_fail=1;

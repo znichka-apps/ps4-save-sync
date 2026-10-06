@@ -9,5 +9,6 @@
 typedef struct { char *name,*title_id,*path,*dir_name; uint32_t blocks; uint16_t flags,type; void *codes; } save_entry_t;
 
 int orbis_SaveMount(const save_entry_t*,uint32_t,char*);
+int orbis_SaveMountChecked(const save_entry_t*,uint32_t,char*,int*);
 int orbis_SaveUmount(const char*);
 #endif

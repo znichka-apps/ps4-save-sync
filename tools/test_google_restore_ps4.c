@@ -7,7 +7,7 @@
 #include "../source/google_restore_ps4.c"
 
 app_config_t apollo_config={.user_id=42};
-static int target_absent=1, import_calls, import_fail;
+static int target_absent=1, import_calls, import_fail, unmount_fail;
 static uint32_t expected_trace_user;
 static char last_phase[112];
 void google_replace_phase(uint32_t user,const char *phase,const char *step) {
@@ -23,6 +23,7 @@ int orbis_ImportStagedSave(const char *stage,const char *title,const char *direc
     assert(!strcmp(stage,"stagepath")&&!strcmp(title,"CUSA12345")&&!strcmp(directory,"SAVE")&&user==42);
     assert(trace_user==expected_trace_user);
     assert(!cancelled(data));if(mount_blocked)*mount_blocked=0;import_calls++;
+    if (unmount_fail) { *mount_blocked=1; errno=ENOENT; return 0; }
     if (import_fail) { errno=ENOENT; return 0; }
     return 1;
 }
@@ -43,9 +44,14 @@ int main(void) {
     assert(!strcmp(last_phase,"import adapter: result=0 errno=2 call=ImportStagedSave"));
     assert(errno==ENOENT);
     import_fail=0;
+    unmount_fail=1;
+    assert(google_restore_local(&b,never_cancel,completed,NULL)==GOOGLE_UPLOAD_FAILED&&import_calls==4);
+    assert(b.mount_blocked && errno==ENOENT);
+    assert(!strcmp(last_phase,"import adapter: result=0 errno=2 call=ImportStagedSave"));
+    unmount_fail=0; b.mount_blocked=0;
     b.replace_trace=0;expected_trace_user=0;
-    target_absent=0;assert(google_restore_local(&b,never_cancel,completed,NULL)==GOOGLE_UPLOAD_FAILED&&import_calls==3);
+    target_absent=0;assert(google_restore_local(&b,never_cancel,completed,NULL)==GOOGLE_UPLOAD_FAILED&&import_calls==4);
     target_absent=1;apollo_config.user_id=43;
-    assert(google_restore_local(&b,never_cancel,completed,NULL)==GOOGLE_UPLOAD_FAILED&&import_calls==3);
+    assert(google_restore_local(&b,never_cancel,completed,NULL)==GOOGLE_UPLOAD_FAILED&&import_calls==4);
     puts("Google PS4 restore adapter tests passed.");return 0;
 }

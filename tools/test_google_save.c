@@ -40,13 +40,14 @@ char *__real_mkdtemp(char*);
 char *__wrap_mkdtemp(char *p) { if (fail_temp) { errno=ENOSPC; return NULL; } return __real_mkdtemp(p); }
 time_t __real_time(time_t*);
 time_t __wrap_time(time_t *t) { if (fail_time) { errno=EIO; return -1; } return __real_time(t); }
-int orbis_SaveMount(const save_entry_t *save,uint32_t mode,char *path)
+int orbis_SaveMountChecked(const save_entry_t *save,uint32_t mode,char *path,int *mount_uncertain)
 {
+    *mount_uncertain=0;
     assert(!mounted && mode==ORBIS_SAVE_DATA_MOUNT_MODE_RDONLY && !save->path);
     assert(!strcmp(save->title_id,"CUSA12345") && !strcmp(save->dir_name,"SAVE_DATA"));
     assert(save->flags==(SAVE_FLAG_PS4|SAVE_FLAG_HDD) && save->type==FILE_TYPE_PS4);
     mount_calls++;
-    if (fail_mount) { errno=EACCES; return 0; }
+    if (fail_mount) { *mount_uncertain=1; errno=EACCES; return 0; }
     mounted=1; strcpy(path,"SAVE_DATA"); return 1;
 }
 int orbis_SaveUmount(const char *path)
@@ -109,6 +110,7 @@ int main(void)
     assert(!google_backup_hash(&backup,cancel,NULL) && strstr(backup.diagnostic,"archive reading (empty)"));
     assert(!unlink(backup.archive));
     reset(); fail_mount=1; assert(!google_backup_stage(&backup,cancel,NULL) && !unmount_calls);
+    assert(backup.mount_blocked);
     assert(strstr(backup.diagnostic,"mount: errno="));
     assert(google_backup_cleanup(&backup)); remove_cache();
     reset(); fail_unmount=1; assert(!google_backup_stage(&backup,cancel,NULL));

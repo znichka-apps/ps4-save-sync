@@ -301,7 +301,7 @@ static int recover_record(const char *dir,journal *j,const google_replace_io *io
     }
     int imported=io->import_archive(io->data,&rollback,1);
     rollback_status(j->user,"rollback ZIP import",imported,-1,rollback.diagnostic);
-    if (!imported) goto failed;
+    if (!imported || rollback.mount_blocked) goto failed;
     google_replace_phase(j->user,"rollback","after ok");
     j->phase=RECOVERED;
     if (!write_journal(dir,j)) return GOOGLE_REPLACE_NEEDS_RECOVERY;
@@ -340,9 +340,9 @@ int google_replace_start(google_backup *source,const google_replace_io *io)
     snprintf(rollback.directory,sizeof(rollback.directory),"%s",source->directory);
     rollback.user=source->user;
     google_replace_phase(source->user,"rollback staging","before");
-    if (!io->stage_backup(io->data,&rollback)) {
+    if (!io->stage_backup(io->data,&rollback) || rollback.mount_blocked) {
         google_replace_phase(source->user,"rollback staging","after failed");
-        diagnostic(source,rollback.mount_blocked?"backup unmount failed; restart app":"rollback backup could not be staged");
+        diagnostic(source,rollback.mount_blocked?"backup mount state uncertain; stop save operations":"rollback backup could not be staged");
         source->mount_blocked=rollback.mount_blocked;
         return io->cancelled(io->data)?GOOGLE_REPLACE_CANCELLED:GOOGLE_REPLACE_FAILED;
     }
@@ -394,7 +394,7 @@ int google_replace_start(google_backup *source,const google_replace_io *io)
     j.phase=IMPORTING;
     if (!write_journal(dir,&j)) goto rollback_attempt;
     google_replace_phase(j.user,"import","before");
-    if (!io->import_archive(io->data,&source_copy,0)) {
+    if (!io->import_archive(io->data,&source_copy,0) || source_copy.mount_blocked) {
         google_replace_phase(j.user,"import","after failed");
         goto rollback_attempt;
     }
@@ -408,7 +408,7 @@ rollback_attempt:
     if (j.phase==DELETING) google_replace_phase(j.user,"target delete","after failed");
     if (source_copy.mount_blocked) {
         source->mount_blocked=1;
-        diagnostic(source,"import unmount failed; restart before recovery");
+        diagnostic(source,"import mount state uncertain; rollback stopped");
         return GOOGLE_REPLACE_NEEDS_RECOVERY;
     }
     {

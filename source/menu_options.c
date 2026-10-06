@@ -169,7 +169,7 @@ int google_drive_ui_frame(void)
     }
     const char *cancel_button = orbisPadGetConf()->crossButtonOK ? "Circle" : "Cross";
     if (status.mount_blocked)
-        DrawString(180, 900, "Restart the app to release the failed mount.");
+        DrawString(180, 900, "Mount state uncertain. Stop save operations.");
     else if (status.busy && !status.cancellable)
         DrawString(180, 900, "Finishing operation...");
     else
