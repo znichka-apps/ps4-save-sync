@@ -2,6 +2,7 @@
 #include <threads.h>
 #include <unistd.h>
 #include <stdio.h>
+#include <math.h>
 
 #define STBI_ASSERT(x)
 #define STB_IMAGE_IMPLEMENTATION
@@ -13,9 +14,6 @@
 
 #include <dbglogger.h>
 #define LOG dbglogger_log
-
-#define JAR_COLUMNS 7
-
 
 int LoadMenuTexture(const char* path, int idx)
 {
@@ -137,7 +135,7 @@ void DrawHeader_Ani(int icon, const char * hdrTitle, const char * headerSubTitle
 */
 
 	//header mini icon
-	DrawTextureCenteredX(&menu_textures[icon], MENU_ICON_OFF - 20, 32, 0, 96, 96, 0xffffff00 | icon_a);
+	DrawTextureCenteredX(&menu_textures[znichka_icon_png_index], MENU_ICON_OFF - 20, 32, 0, 96, 96, 0xffffff00 | icon_a);
 
 	//header title string
 	SetFontColor(rgba | icon_a, 0);
@@ -184,13 +182,13 @@ void DrawHeader(int icon, int xOff, const char * hdrTitle, const char * headerSu
 	SetFontColor(rgba, 0);
 	if (mode)
 	{
-		DrawTextureCenteredX(&menu_textures[icon], xOff + MENU_ICON_OFF - 12, 40, 0, 64, 64, 0xffffffff);
+		DrawTextureCenteredX(&menu_textures[znichka_icon_png_index], xOff + MENU_ICON_OFF - 12, 40, 0, 64, 64, 0xffffffff);
 		SetFontSize(APP_FONT_SIZE_SUBTITLE);
 		DrawString(xOff + MENU_ICON_OFF + 40, 35, headerTitle);
 	}
 	else
 	{
-		DrawTextureCenteredX(&menu_textures[icon], xOff + MENU_ICON_OFF - 20, 32, 0, 96, 96, 0xffffffff);
+		DrawTextureCenteredX(&menu_textures[znichka_icon_png_index], xOff + MENU_ICON_OFF - 20, 32, 0, 96, 96, 0xffffffff);
 		SetFontSize(APP_FONT_SIZE_TITLE);
 		DrawString(xOff + MENU_ICON_OFF + 40, 31, headerTitle);
 	}
@@ -264,65 +262,107 @@ void DrawTextureRotated(png_texture* tex, int x, int y, int z, int w, int h, u32
 	SDL_RenderCopyEx(renderer, tex->texture, NULL, &dest, angle, NULL, SDL_FLIP_NONE);
 }
 
-static void drawJar(uint8_t idx, int pos_x, int pos_y, const char* text, uint8_t alpha)
+static void drawOrbit(int x, int y, int radius)
 {
-	uint8_t active = (menu_sel + jar_trophy_png_index == idx);
-	DrawTexture(&menu_textures[idx], pos_x, pos_y, 0, menu_textures[idx].width, menu_textures[idx].height, 0xffffff00 | alpha);
-
-	//Selected
-	if (active)
-		DrawTexture(&menu_textures[idx + JAR_COLUMNS], pos_x, pos_y, 0, menu_textures[idx + JAR_COLUMNS].width, menu_textures[idx + JAR_COLUMNS].height, 0xffffff00 | alpha);
-
-	SetFontColor(APP_FONT_MENU_COLOR | (alpha == 0xFF ? (active ? 0xFF : 0x20) : alpha), 0);
-	DrawStringMono(pos_x + (menu_textures[idx].width / 2), pos_y - 50, text);
+	for (int i = 0; i < 32; i++) {
+		float a = (float)i * 6.2831853f / 32.0f;
+		float b = (float)(i + 1) * 6.2831853f / 32.0f;
+		SDL_RenderDrawLine(renderer, x + (int)(cosf(a) * radius), y + (int)(sinf(a) * radius),
+			x + (int)(cosf(b) * radius), y + (int)(sinf(b) * radius));
+	}
 }
 
-static void _drawColumn(uint8_t idx, int pos_x, int pos_y, uint8_t alpha)
+static void drawCardIcon(int index, int x, int y, int active, uint8_t alpha)
 {
-	DrawTexture(&menu_textures[idx], pos_x, pos_y, 0, menu_textures[idx].width, menu_textures[idx].height, 0xffffff00 | alpha);
+	SDL_SetRenderDrawColor(renderer, active ? 246 : 142, active ? 211 : 155,
+		active ? 92 : 194, alpha);
+	switch (index) {
+	case 0: /* trophy star */
+		for (int i = 0; i < 8; i++) {
+			float a = (float)i * 6.2831853f / 8.0f;
+			SDL_RenderDrawLine(renderer, x, y, x + (int)(cosf(a) * 35), y + (int)(sinf(a) * 35));
+		}
+		drawOrbit(x, y, 8);
+		break;
+	case 1: /* USB branch */
+		SDL_RenderDrawLine(renderer, x, y + 32, x, y - 31);
+		SDL_RenderDrawLine(renderer, x, y - 11, x - 27, y - 11);
+		SDL_RenderDrawLine(renderer, x, y + 8, x + 27, y + 8);
+		SDL_RenderDrawLine(renderer, x, y - 31, x - 7, y - 23);
+		SDL_RenderDrawLine(renderer, x, y - 31, x + 7, y - 23);
+		SDL_Rect usb = {x - 31, y - 15, 8, 8}; SDL_RenderFillRect(renderer, &usb);
+		usb.x = x + 23; usb.y = y + 4; SDL_RenderFillRect(renderer, &usb);
+		break;
+	case 2: /* drive bays */
+		for (int i = 0; i < 2; i++) {
+			SDL_Rect bay = {x - 35, y - 25 + i * 32, 70, 24};
+			SDL_RenderDrawRect(renderer, &bay);
+			SDL_Rect light = {x + 20, y - 16 + i * 32, 5, 5}; SDL_RenderFillRect(renderer, &light);
+		}
+		break;
+	case 3: /* online database */
+		drawOrbit(x, y, 28); drawOrbit(x, y, 8);
+		SDL_RenderDrawLine(renderer, x - 35, y, x + 35, y);
+		SDL_RenderDrawLine(renderer, x, y - 35, x, y + 35);
+		break;
+	case 4: /* Drive's triangular silhouette */
+		SDL_RenderDrawLine(renderer, x - 31, y + 27, x, y - 28);
+		SDL_RenderDrawLine(renderer, x, y - 28, x + 31, y + 27);
+		SDL_RenderDrawLine(renderer, x + 31, y + 27, x - 31, y + 27);
+		SDL_RenderDrawLine(renderer, x - 17, y + 5, x + 17, y + 5);
+		break;
+	case 5: /* tools */
+		drawOrbit(x, y, 25);
+		SDL_RenderDrawLine(renderer, x - 35, y, x + 35, y);
+		SDL_RenderDrawLine(renderer, x, y - 35, x, y + 35);
+		drawOrbit(x, y, 8);
+		break;
+	case 6: /* settings sliders */
+		for (int i = 0; i < 3; i++) {
+			int yy = y - 25 + i * 25;
+			SDL_RenderDrawLine(renderer, x - 34, yy, x + 34, yy);
+			SDL_Rect knob = {x - 19 + i * 15, yy - 6, 12, 12}; SDL_RenderFillRect(renderer, &knob);
+		}
+		break;
+	default: /* about */
+		drawOrbit(x, y, 33);
+		SDL_Rect dot = {x - 3, y - 19, 6, 6}; SDL_RenderFillRect(renderer, &dot);
+		SDL_RenderDrawLine(renderer, x, y - 5, x, y + 20);
+		break;
+	}
 }
 
-static void drawColumns(uint8_t alpha)
+static void drawMainCards(uint8_t alpha)
 {
-//	DrawTexture(&menu_textures[bg_water_png_index], bg_water_png_x - apollo_config.marginH, apollo_config.marginV + bg_water_png_y, 0, bg_water_png_w + (apollo_config.marginH * 2), bg_water_png_h, 0xffffff00 | 0xFF);
-
-	//Columns
-	_drawColumn(column_1_png_index, column_1_png_x, column_1_png_y, alpha);
-	_drawColumn(column_2_png_index, column_2_png_x, column_2_png_y, alpha);
-	_drawColumn(column_3_png_index, column_3_png_x, column_3_png_y, alpha);
-	_drawColumn(column_4_png_index, column_4_png_x, column_4_png_y, alpha);
-	_drawColumn(column_5_png_index, column_5_png_x, column_5_png_y, alpha);
-	_drawColumn(column_6_png_index, column_6_png_x, column_6_png_y, alpha);
-	_drawColumn(column_7_png_index, column_7_png_x, column_7_png_y, alpha);
-}
-
-static void drawJars(uint8_t alpha)
-{
-	SetFontAlign(FONT_ALIGN_CENTER);
-	SetFontSize(APP_FONT_SIZE_JARS);
-	SetCurrentFont(font_adonais_regular);
-
-	//Trophies
-	drawJar(jar_trophy_png_index, jar_empty_png_x, jar_empty_png_y, (alpha == 0xFF ? "Trophies" : ""), alpha);
-
-	//USB save
-	drawJar(jar_usb_png_index, jar_usb_png_x, jar_usb_png_y, (alpha == 0xFF ? "USB Saves" : ""), alpha);
-	
-	//HDD save
-	drawJar(jar_hdd_png_index, jar_hdd_png_x, jar_hdd_png_y, (alpha == 0xFF ? "HDD Saves" : ""), alpha);
-
-	//Online cheats
-	drawJar(jar_db_png_index, jar_db_png_x, jar_db_png_y, (alpha == 0xFF ? (apollo_config.online_opt ? "FTP Server" : "Online DB") : ""), alpha);
-	
-	//User Backup
-	drawJar(jar_bup_png_index, jar_bup_png_x, jar_bup_png_y, (alpha == 0xFF ? "User Tools" : ""), alpha);
-
-	//Options
-	drawJar(jar_opt_png_index, jar_opt_png_x, jar_opt_png_y, (alpha == 0xFF ? "Settings" : ""), alpha);
-	
-	//About
-	drawJar(jar_about_png_index, jar_about_png_x, jar_about_png_y, (alpha == 0xFF ? "About" : ""), alpha);
-
+	static const char *labels[8] = {"Trophies", "USB Saves", "HDD Saves", "Online Database",
+		"Google Drive", "User Tools", "Settings", "About"};
+	static const char *details[8] = {"Trophy saves", "USB storage", "Internal storage", "Browse online saves",
+		"Backups and restore", "Local save tools", "App preferences", "App information"};
+	SetFontAlign(FONT_ALIGN_LEFT);
+	SDL_SetRenderDrawBlendMode(renderer, SDL_BLENDMODE_BLEND);
+	for (int i = 0; i < 8; i++) {
+		int x = 144 + (i % 4) * 413;
+		int y = 440 + (i / 4) * 208;
+		int active = (menu_sel == i);
+		SDL_Rect card = {x, y, 380, 180};
+		SDL_SetRenderDrawColor(renderer, active ? 24 : 12, active ? 29 : 19,
+			active ? 68 : 38, active ? alpha * 230 / 255 : alpha * 205 / 255);
+		SDL_RenderFillRect(renderer, &card);
+		SDL_SetRenderDrawColor(renderer, active ? 246 : 88, active ? 211 : 81,
+			active ? 92 : 163, alpha);
+		SDL_RenderDrawRect(renderer, &card);
+		drawCardIcon(i, x + 56, y + 79, active, alpha);
+		SetFontColor((active ? 0xF6D35C00 : APP_FONT_COLOR) | alpha, 0);
+		SetFontSize(i == 3 ? 34 : 40, i == 3 ? 38 : 44);
+		DrawString(x + 111, y + 50, i == 3 && apollo_config.online_opt ? "FTP Server" : labels[i]);
+		SetFontColor(0x8E9BC200 | alpha, 0);
+		SetFontSize(30, 34);
+		DrawString(x + 24, y + 132, details[i]);
+	}
+	SetFontAlign(FONT_ALIGN_SCREEN_CENTER);
+	SetFontColor(APP_FONT_COLOR | alpha, 0);
+	SetFontSize(36, 40);
+	DrawString(0, 921, "Left / Right  Navigate       Confirm  Open       Back  Exit");
 	SetFontAlign(FONT_ALIGN_LEFT);
 }
 
@@ -345,7 +385,7 @@ void drawSplashLogo(int mode)
 	{
 		// clear the current display buffer
 		SDL_RenderClear(renderer);
-		DrawBackground2D(0x000000FF);
+		DrawBackgroundTexture(0, 0xFF);
 		
 		//------------ Backgrounds
 		int logo_a_t = ((ani < 0x20) ? 0 : ((ani - 0x20)*3));
@@ -353,10 +393,7 @@ void drawSplashLogo(int mode)
 			logo_a_t = 0xFF;
 		u8 logo_a = (u8)logo_a_t;
 
-		SDL_SetTextureAlphaMod(menu_textures[buk_scr_png_index].texture, logo_a);
-
-		//App description
-		DrawTextureCentered(&menu_textures[buk_scr_png_index], SCREEN_WIDTH/2, SCREEN_HEIGHT /2, 0, menu_textures[buk_scr_png_index].width, menu_textures[buk_scr_png_index].height, 0xFFFFFF00 | logo_a);
+		DrawTextureCentered(&menu_textures[znichka_logo_png_index], SCREEN_WIDTH/2, SCREEN_HEIGHT /2, 0, 1060, 328, 0xFFFFFF00 | logo_a);
 
 		//flush and flip
 		SDL_RenderPresent(renderer);
@@ -374,10 +411,10 @@ void drawEndLogo(void)
 	{
 		// clear the current display buffer
 		SDL_RenderClear(renderer);
-		DrawBackground2D(0xFFFFFFFF);
+		DrawBackground2D(0x070A12FF);
 
 		//App description
-		DrawTextureCentered(&menu_textures[logo_png_index], SCREEN_WIDTH/2, SCREEN_HEIGHT /2, 0, menu_textures[logo_png_index].width *3/4, menu_textures[logo_png_index].height *3/4, 0xFFFFFF00 | 0xFF);
+		DrawTextureCentered(&menu_textures[znichka_logo_png_index], SCREEN_WIDTH/2, SCREEN_HEIGHT /2, 0, 1060, 328, 0xFFFFFF00 | 0xFF);
 
 		rect.y = 0;
 		SDL_SetRenderDrawColor(renderer, 0, 0, 0, 0xFF);
@@ -393,21 +430,10 @@ void drawEndLogo(void)
 
 static void _draw_MainMenu(uint8_t alpha)
 {
-	//------------ Backgrounds
-
-	//Background
 	DrawBackgroundTexture(0, 0xFF);
-	
-	//App logo
-	DrawTexture(&menu_textures[logo_png_index], logo_png_x, logo_png_y, 0, logo_png_w, logo_png_h, 0xFFFFFFFF);
-	
-	//App description
-	DrawTextureCenteredX(&menu_textures[logo_text_png_index], SCREEN_WIDTH/2, SCREEN_HEIGHT/2 - 40, 0, menu_textures[logo_text_png_index].width * 3/2, menu_textures[logo_text_png_index].height * 3/2, 0xFFFFFF00 | 0xFF);
-
-	drawColumns(alpha);
-
-	//------------ Icons
-	drawJars(alpha);
+	DrawTextureCenteredX(&menu_textures[znichka_logo_png_index], SCREEN_WIDTH/2, 82, 0,
+		800, 248, 0xFFFFFF00 | alpha);
+	drawMainCards(alpha);
 }
 
 void Draw_MainMenu_Ani(void)
@@ -416,7 +442,7 @@ void Draw_MainMenu_Ani(void)
 	for (ani = 0; ani < max; ani++)
 	{
 		SDL_RenderClear(renderer);
-		DrawBackground2D(0xFFFFFFFF);
+		DrawBackground2D(0x070A12FF);
 		
 		//------------ Backgrounds
 		u8 bg_a = (u8)(ani * 2);
@@ -431,10 +457,8 @@ void Draw_MainMenu_Ani(void)
 		DrawBackgroundTexture(0, bg_a);
 		
 		//App logo
-		DrawTexture(&menu_textures[logo_png_index], logo_png_x, logo_png_y, 0, logo_png_w, logo_png_h, 0xFFFFFF00 | logo_a);
-		
-		//App description
-		DrawTextureCenteredX(&menu_textures[logo_text_png_index], SCREEN_WIDTH/2, SCREEN_HEIGHT/2 - 40, 0, menu_textures[logo_text_png_index].width * 3/2, menu_textures[logo_text_png_index].height * 3/2, 0xFFFFFF00 | logo_a);
+		DrawTextureCenteredX(&menu_textures[znichka_logo_png_index], SCREEN_WIDTH/2, 82, 0,
+			800, 248, 0xFFFFFF00 | logo_a);
 
 		SDL_RenderPresent(renderer);
 	}
@@ -444,7 +468,7 @@ void Draw_MainMenu_Ani(void)
 	for (ani = 0; ani < max; ani++)
 	{
 		SDL_RenderClear(renderer);
-		DrawBackground2D(0xFFFFFFFF);
+		DrawBackground2D(0x070A12FF);
 		
 		u8 icon_a = (u8)(((ani * rate) > 0xFF) ? 0xFF : (ani * rate));
 		

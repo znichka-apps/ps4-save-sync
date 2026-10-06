@@ -94,7 +94,7 @@ void Draw_CheatsMenu_Options_Ani_Exit(void)
 	for (ani = MENU_ANI_MAX - 1; ani >= 0; ani--)
 	{
 		SDL_RenderClear(renderer);
-		DrawBackground2D(0xFFFFFFFF);
+		DrawBackground2D(0x070A12FF);
 
 		u8 icon_a = (u8)((int)(((SCREEN_WIDTH - left) / SCREEN_WIDTH) * 255.0));
 		left = MENU_SPLIT_OFF + ((MENU_ANI_MAX - ani) * div * 3);
@@ -123,7 +123,7 @@ void Draw_CheatsMenu_Options_Ani(void)
     for (ani = 0; ani < MENU_ANI_MAX; ani++)
     {
 		SDL_RenderClear(renderer);
-		DrawBackground2D(0xFFFFFFFF);
+		DrawBackground2D(0x070A12FF);
         
 		u8 icon_a = (u8)(((ani * 4 + 0x40) > 0xFF) ? 0xFF : (ani * 4 + 0x40));
 		left = SCREEN_WIDTH - (ani * div * 3);
@@ -236,7 +236,7 @@ void Draw_CheatsMenu_View_Ani_Exit(void)
 	for (ani = MENU_ANI_MAX - 1; ani >= 0; ani--)
 	{
 		SDL_RenderClear(renderer);
-		DrawBackground2D(0xFFFFFFFF);
+		DrawBackground2D(0x070A12FF);
 
 		u8 icon_a = (u8)((int)(((SCREEN_WIDTH - left) / SCREEN_WIDTH) * 255.0));
 		left = MENU_SPLIT_OFF + ((MENU_ANI_MAX - ani) * div * 3);
@@ -265,7 +265,7 @@ void Draw_CheatsMenu_View_Ani(const char* title)
     for (ani = 0; ani < MENU_ANI_MAX; ani++)
     {
 		SDL_RenderClear(renderer);
-		DrawBackground2D(0xFFFFFFFF);
+		DrawBackground2D(0x070A12FF);
 
 		u8 icon_a = (u8)(((ani * 4 + 0x40) > 0xFF) ? 0xFF : (ani * 4 + 0x40));
 		left = SCREEN_WIDTH - (ani * div * 3);
@@ -478,7 +478,7 @@ void Draw_CheatsMenu_Selection_Ani(void)
     for (ani = 0; ani < MENU_ANI_MAX; ani++)
     {
         SDL_RenderClear(renderer);
-        DrawBackground2D(0xFFFFFFFF);
+		DrawBackground2D(0x070A12FF);
         
         u8 icon_a = (u8)(((ani * 2) > 0xFF) ? 0xFF : (ani * 2));
         
@@ -569,7 +569,7 @@ void Draw_UserCheatsMenu_Ani(save_list_t * list)
     for (int ani = 0; ani < MENU_ANI_MAX; ani++)
     {
         SDL_RenderClear(renderer);
-        DrawBackground2D(0xFFFFFFFF);
+		DrawBackground2D(0x070A12FF);
         
         u8 icon_a = (u8)(((ani * 2) > 0xFF) ? 0xFF : (ani * 2));
         

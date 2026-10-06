@@ -28,18 +28,19 @@ void google_drive_ui_upload(const char *game, const char *title, const char *dir
     }
     google_panel = 1;
 }
-static void google_text(const char *text, int y)
+static void google_text(const char *text, int y, int bottom)
 {
-    char line[61];
-    while (*text) {
-        size_t n = google_text_prefix(text,60);
+    char line[73];
+    while (*text && y <= bottom) {
+        size_t n = google_text_prefix(text,72);
         const char *newline = memchr(text, '\n', n);
         if (newline) n = (size_t)(newline - text);
         memcpy(line, text, n); line[n] = 0;
         DrawString(180, y, line);
-        y += 35; text += n;
+        y += 46; text += n;
         if (*text == '\n') text++;
     }
+    if (*text) DrawString(180, bottom, "...");
 }
 void google_drive_ui_start(int action)
 {
@@ -111,69 +112,76 @@ int google_drive_ui_frame(void)
     }
     DrawHeader(cat_opt_png_index, 0, "Google Drive", NULL, APP_FONT_TITLE_COLOR | 0xFF, 0xffffffff, 0);
     SetFontAlign(FONT_ALIGN_LEFT);
-    SetFontSize(28, 32);
+    SetFontSize(36, 42);
     SetFontColor(APP_FONT_COLOR | 0xFF, 0);
     /* Wrap sanitized text; reserve generous width for Google's returned values. */
-    google_text(status.message, 250);
-    if (status.preparation_details[0]) google_text(status.preparation_details, 440);
+    google_text(status.message, 220, status.browsing ? 300 : 375);
+    const int show_details = !status.browsing && pending==0 &&
+        !status.restore_ready && !status.verification_url[0];
+    if (show_details && status.preparation_details[0])
+        google_text(status.preparation_details, 460, status.discovery_details[0] ? 585 : 825);
     if (status.total_bytes)
-        DrawFormatString(180, 370, "Transfer: %llu / %llu bytes (%u%%)",
+        DrawFormatString(180, 390, "Transfer: %llu / %llu bytes (%u%%)",
             (unsigned long long)status.completed_bytes, (unsigned long long)status.total_bytes,
             (unsigned)(100.0 * status.completed_bytes / status.total_bytes));
-    if (status.discovery_details[0]) google_text(status.discovery_details, 440);
+    if (show_details && status.discovery_details[0])
+        google_text(status.discovery_details, status.preparation_details[0] ? 625 : 460, 825);
     if (!status.busy && pending!=0) {
         char last_phase[112];
         if (!google_replace_last_phase(apollo_config.user_id,last_phase,sizeof(last_phase)))
             snprintf(last_phase,sizeof(last_phase),"unavailable");
-        DrawFormatString(180,690,"Last Replace phase: %s",last_phase);
+        DrawString(180,790,"Last Replace phase:");
+        google_text(last_phase,835,890);
     }
     if (!status.busy && pending==1) {
-        DrawFormatString(180,660,"Recovery pending: %s / %s, user %08x",
+        DrawFormatString(180,690,"Recovery pending: %s / %s, user %08x",
             pending_backup.title,pending_backup.directory,apollo_config.user_id);
-        DrawString(180,720,"Target may be partial. Both ZIPs and journal are retained.");
-        DrawString(180,820,"R1: retry best-effort recovery  Circle: close");
+        DrawString(180,750,"Target may be partial. Both ZIPs and journal are retained.");
+        DrawString(180,935,"R1: retry recovery    Back: close");
     } else if (!status.busy && pending<0) {
-        DrawString(180,720,"Replacement journal cannot be verified. Save operations blocked.");
+        DrawString(180,750,"Replacement journal cannot be verified. Save operations blocked.");
     }
     if (!status.busy && pending==0 && status.restore_ready) {
         const google_backup *b=&status.restore_backup;
         const int cross_ok=orbisPadGetConf()->crossButtonOK;
         const char *restore_button=cross_ok?"Cross":"Circle";
         const char *discard_button=cross_ok?"Circle":"Cross";
-        DrawFormatString(180,660,"Game: %.*s",(int)google_text_prefix(b->game,60),b->game);
-        DrawFormatString(180,700,"Title: %s  Save: %s",b->title,b->directory);
-        DrawFormatString(180,740,"Backup UTC: %s  Current user: %08x",b->utc,apollo_config.user_id);
-        DrawFormatString(180,820,"%s: empty slot  Triangle: replace (power-loss risk)  %s: discard",
+        DrawFormatString(180,670,"Game: %.*s",(int)google_text_prefix(b->game,65),b->game);
+        DrawFormatString(180,720,"Title: %s  Save: %s",b->title,b->directory);
+        DrawFormatString(180,770,"Backup UTC: %s  Current user: %08x",b->utc,apollo_config.user_id);
+        DrawFormatString(180,875,"%s: empty slot    Triangle: replace    %s: discard",
             restore_button,discard_button);
     }
     if (!status.busy && status.browsing) {
+        SetFontSize(34, 40);
         for (unsigned i=0;i<status.backups.count;i++) {
             const google_backup *b=&status.backups.entries[i].backup;
             /* All remote values are arguments, never format strings. */
-            DrawFormatString(180,350+i*32,"%s [%s] %s  %.*s",i==google_selection?">":" ",b->title,b->utc,
-                (int)google_text_prefix(b->game,28),b->game);
+            DrawFormatString(180,350+i*40,"%s [%s] %s  %.*s",i==google_selection?">":" ",b->title,b->utc,
+                (int)google_text_prefix(b->game,42),b->game);
         }
+        SetFontSize(36, 42);
         if (status.backups.count) {
             const google_backup *b=&status.backups.entries[google_selection].backup;
-            DrawFormatString(180,690,"Game: %.*s",(int)google_text_prefix(b->game,60),b->game);
-            DrawFormatString(180,725,"Save: %s",b->directory);
-            DrawFormatString(180,755,"Backup: %s  Size: %llu bytes",b->utc,(unsigned long long)b->size);
+            DrawFormatString(180,775,"Game: %.*s",(int)google_text_prefix(b->game,65),b->game);
+            DrawFormatString(180,820,"Save: %s",b->directory);
+            DrawFormatString(180,865,"Backup: %s  Size: %llu bytes",b->utc,(unsigned long long)b->size);
         }
-        DrawString(180,820,"Up/Down: select  Confirm: download  R1: next page");
+        DrawString(180,920,"Up/Down: select    Confirm: download    R1: next page");
     }
     if (status.verification_url[0]) {
-        DrawString(180, 440, "Verification URL:");
-        google_text(status.verification_url, 480);
-        DrawString(180, 680, "User code (case sensitive):");
-        google_text(status.user_code, 720);
+        DrawString(180, 480, "Verification URL:");
+        google_text(status.verification_url, 530, 665);
+        DrawString(180, 710, "User code (case sensitive):");
+        google_text(status.user_code, 760, 860);
     }
     const char *cancel_button = orbisPadGetConf()->crossButtonOK ? "Circle" : "Cross";
     if (status.mount_blocked)
-        DrawString(180, 900, "Mount state uncertain. Stop save operations.");
+        DrawString(180, 995, "Mount state uncertain. Stop save operations.");
     else if (status.busy && !status.cancellable)
-        DrawString(180, 900, "Finishing operation...");
+        DrawString(180, 995, "Finishing operation...");
     else
-        DrawFormatString(180, 900, "%s: %s", cancel_button,
+        DrawFormatString(180, 995, "%s: %s", cancel_button,
             status.busy ? "cancel operation" : "return");
     return 1;
 }

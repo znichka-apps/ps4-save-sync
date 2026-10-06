@@ -33,7 +33,7 @@
 #include "font-10x20.h"
 
 //Sound
-#include <s3m.h>
+#include <math.h>
 #define SAMPLING_FREQ          48000 /* 48khz. */
 #define AUDIO_SAMPLES          256   /* audio samples */
 
@@ -293,39 +293,8 @@ static int LoadTextures_Menu(void)
 	load_menu_texture(scroll_bg, png);
 	load_menu_texture(scroll_lock, png);
 	load_menu_texture(help, png);
-	load_menu_texture(buk_scr, png);
-	load_menu_texture(cat_about, png);
-	load_menu_texture(cat_cheats, png);
-	load_menu_texture(cat_opt, png);
-	load_menu_texture(cat_usb, png);
-	load_menu_texture(cat_bup, png);
-	load_menu_texture(cat_db, png);
-	load_menu_texture(cat_hdd, png);
-	load_menu_texture(cat_sav, png);
-	load_menu_texture(cat_warning, png);
-	load_menu_texture(column_1, png);
-	load_menu_texture(column_2, png);
-	load_menu_texture(column_3, png);
-	load_menu_texture(column_4, png);
-	load_menu_texture(column_5, png);
-	load_menu_texture(column_6, png);
-	load_menu_texture(column_7, png);
-	load_menu_texture(jar_about, png);
-	load_menu_texture(jar_about_hover, png);
-	load_menu_texture(jar_bup, png);
-	load_menu_texture(jar_bup_hover, png);
-	load_menu_texture(jar_db, png);
-	load_menu_texture(jar_db_hover, png);
-	load_menu_texture(jar_trophy, png);
-	load_menu_texture(jar_trophy_hover, png);
-	load_menu_texture(jar_hdd, png);
-	load_menu_texture(jar_hdd_hover, png);
-	load_menu_texture(jar_opt, png);
-	load_menu_texture(jar_opt_hover, png);
-	load_menu_texture(jar_usb, png);
-	load_menu_texture(jar_usb_hover, png);
-	load_menu_texture(logo, png);
-	load_menu_texture(logo_text, png);
+	load_menu_texture(znichka_logo, png);
+	load_menu_texture(znichka_icon, png);
 	load_menu_texture(tag_lock, png);
 	load_menu_texture(tag_own, png);
 	load_menu_texture(tag_vmc, png);
@@ -356,19 +325,12 @@ static int LoadTextures_Menu(void)
 
 static int LoadSounds(void* data)
 {
-	s3m_t s3m;
-
-	s3m_initialize(&s3m, SAMPLING_FREQ);
-	// Decode a mp3 file to play
-	if (s3m_load(&s3m, APOLLO_APP_PATH "audio/haiku.s3m") < 0)
-	{
-		LOG("[ERROR] Failed to decode audio file");
+	/* Original 16-second ambient pad. Integer frequencies make the loop seamless. */
+	const uint32_t loop_samples = SAMPLING_FREQ * 16;
+	uint32_t cursor = 0;
+	int16_t *pSampleData = malloc(AUDIO_SAMPLES * 2 * sizeof(int16_t));
+	if (!pSampleData)
 		return -1;
-	}
-	LOG("Loaded audio file: %s", s3m.header->song_name);
-
-	// Calculate the sample count and allocate a buffer for the sample data accordingly
-	uint8_t *pSampleData = (uint8_t*) malloc(AUDIO_SAMPLES * 2 * sizeof(int16_t));
 
 	// Play the song in a loop
 	while (!close_app)
@@ -379,14 +341,19 @@ static int LoadSounds(void* data)
 			continue;
 		}
 
-		if (!s3m.rt.playing)
+		for (int i = 0; i < AUDIO_SAMPLES; i++)
 		{
-			// If we reach the end of the file, seek back to the beginning.
-			s3m_play(&s3m);
+			float t = (float)cursor / SAMPLING_FREQ;
+			float swell = 0.76f + 0.18f * sinf(6.2831853f * t / 16.0f);
+			float pad = 0.42f * sinf(6.2831853f * 110.0f * t)
+				+ 0.24f * sinf(6.2831853f * 165.0f * t)
+				+ 0.12f * sinf(6.2831853f * 220.0f * t);
+			int16_t sample = (int16_t)(2100.0f * swell * pad);
+			pSampleData[i * 2] = sample;
+			pSampleData[i * 2 + 1] = sample;
+			if (++cursor == loop_samples)
+				cursor = 0;
 		}
-
-		// Decode the wav into pSampleData
-		s3m_sound_callback(NULL, pSampleData, AUDIO_SAMPLES * 2 * sizeof(int16_t));
 
 		/* Output audio */
 		sceAudioOutOutput(audio, NULL);	// NULL: wait for completion
@@ -394,12 +361,11 @@ static int LoadSounds(void* data)
 		if (sceAudioOutOutput(audio, pSampleData) < 0)
 		{
 			LOG("Failed to output audio");
+			free(pSampleData);
 			return -1;
 		}
 	}
 
-	s3m_stop(&s3m);
-	s3m_unload(&s3m);
 	free(pSampleData);
 
 	return 0;
@@ -697,7 +663,6 @@ s32 main(s32 argc, const char* argv[])
 	// Splash screen logo (fade-out)
 	drawSplashLogo(-1);
 #endif
-	SDL_DestroyTexture(menu_textures[buk_scr_png_index].texture);
 	
 	// Start BGM audio thread
 	SDL_CreateThread(&LoadSounds, "audio_thread", NULL);

@@ -78,7 +78,7 @@ static void _draw_AboutMenu(u8 alpha)
 	u8 alp2 = ((alpha*2) > 0xFF) ? 0xFF : (alpha * 2); 
     
     //------------- About Menu Contents
-	DrawTextureCenteredX(&menu_textures[logo_text_png_index], SCREEN_WIDTH/2, 110, 0, menu_textures[logo_text_png_index].width * 3/2, menu_textures[logo_text_png_index].height * 3/2, 0xFFFFFF00 | alp2);
+	DrawTextureCenteredX(&menu_textures[znichka_logo_png_index], SCREEN_WIDTH/2, 105, 0, 480, 149, 0xFFFFFF00 | alp2);
 
     SetFontAlign(FONT_ALIGN_SCREEN_CENTER);
 	SetCurrentFont(font_adonais_regular);
@@ -137,7 +137,7 @@ void Draw_AboutMenu_Ani(void)
 	for (int ani = 0; ani < MENU_ANI_MAX; ani++)
 	{
 		SDL_RenderClear(renderer);
-		DrawBackground2D(0xFFFFFFFF);
+		DrawBackground2D(0x070A12FF);
 
 		DrawHeader_Ani(cat_about_png_index, _("About"), "v" APOLLO_VERSION, APP_FONT_TITLE_COLOR, 0xffffffff, ani, 12);
 
