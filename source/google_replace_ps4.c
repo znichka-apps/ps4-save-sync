@@ -1,3 +1,4 @@
+#include <stdio.h>
 #include <string.h>
 #include "saves.h"
 #include "settings.h"
@@ -9,7 +10,14 @@ typedef struct {
     int (*cancel)(void *), (*commit)(void *);
     void *data;
     int *mount_blocked;
+    int recovering;
 } replace_context;
+static void recovery_status(uint32_t user,const char *step,int result)
+{
+    char detail[64];
+    snprintf(detail,sizeof(detail),"result=%d",result);
+    google_replace_phase(user,step,detail);
+}
 static int cancelled(void *p)
 {
     replace_context *c=p;
@@ -54,9 +62,18 @@ static int upload_backup(void *p,const google_backup *b)
 static int delete_target(void *p,const google_backup *b)
 {
     replace_context *c=p;
-    if (c->user!=apollo_config.user_id || b->user!=c->user) return 0;
+    if (c->user!=apollo_config.user_id || b->user!=c->user) {
+        if (c->recovering) recovery_status(c->user,"rollback delete user check",0);
+        return 0;
+    }
     save_entry_t s=entry(b);
-    return orbis_SaveDelete(&s) && orbis_SaveTargetAbsent(&s,c->user)==1;
+    int sdk_status=0;
+    int deleted=orbis_SaveDeleteStatus(&s,&sdk_status);
+    if (c->recovering) recovery_status(c->user,"rollback SDK delete",sdk_status);
+    if (!deleted) return 0;
+    int absent=orbis_SaveTargetAbsent(&s,c->user);
+    if (c->recovering) recovery_status(c->user,"rollback delete absence",absent);
+    return absent==1;
 }
 static int import_archive(void *p,google_backup *b,int recovery)
 {
@@ -72,7 +89,8 @@ int google_replace_local(google_backup *b,const google_upload_io *network,
                          int (*cancel)(void *),int (*begin)(void *),void *data)
 {
     int blocked=0;
-    replace_context c={b->user,network,cancel,begin,data,&blocked};
+    replace_context c={.user=b->user,.network=network,.cancel=cancel,.commit=begin,
+                       .data=data,.mount_blocked=&blocked};
     google_replace_io io={&c,cancelled,present,stage_backup,upload_backup,commit,delete_target,import_archive};
     int result=google_replace_start(b,&io);
     if (blocked) b->mount_blocked=1;
@@ -80,7 +98,7 @@ int google_replace_local(google_backup *b,const google_upload_io *network,
 }
 int google_replace_recover_local(uint32_t user,int *mount_blocked)
 {
-    replace_context c={.user=user,.mount_blocked=mount_blocked};
+    replace_context c={.user=user,.mount_blocked=mount_blocked,.recovering=1};
     google_replace_io io={.data=&c,.present=present,.delete_target=delete_target,.import_archive=import_archive};
     if (mount_blocked) *mount_blocked=0;
     return google_replace_recover(user,&io);

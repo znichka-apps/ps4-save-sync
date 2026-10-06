@@ -430,6 +430,16 @@ blocked; restart and investigate the preserved transaction. The OpenOrbis
 backup-related declarations and link stubs do not establish transactional
 firmware behavior, so this path makes no atomicity or guaranteed-recovery claim.
 
+The per-user phase log at `/data/ps4-save-sync/replace/phase-<user-id>.log`
+uses `fsync` for each successfully written record. During rollback it records the ZIP validation result,
+journal checkpoint, target presence result, delete result, and import result.
+The PS4 adapter also records the numeric `sceSaveDataDelete` status and the
+post-delete absence check separately. Import failures include the restore
+diagnostic when available (operation, errno, and ZIP status); a failed unmount
+has its own phase record. `rollback: after failed` is a summary marker and
+cannot by itself identify which operation failed. The optional debug log is
+`/data/ps4-save-sync/apollo.log`.
+
 ### Disposable-save replacement test on PS4
 
 1. Close the game. Use a disposable save with known old progress on the target

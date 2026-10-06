@@ -8,15 +8,26 @@
 
 app_config_t apollo_config={.user_id=42};
 static int target=1,mounted,upload_calls,delete_calls,import_calls,commit_calls,mode;
+static int sdk_delete_failure;
+static char sdk_delete_status[64],delete_absence_status[64];
+void google_replace_phase(uint32_t user,const char *phase,const char *step)
+{
+    assert(user==42);
+    if (!strcmp(phase,"rollback SDK delete")) snprintf(sdk_delete_status,sizeof(sdk_delete_status),"%s",step);
+    if (!strcmp(phase,"rollback delete absence")) snprintf(delete_absence_status,sizeof(delete_absence_status),"%s",step);
+}
 int orbis_SaveTargetAbsent(const save_entry_t *s,uint32_t user)
 {
     assert(user==42 && !strcmp(s->title_id,"CUSA12345") && !strcmp(s->dir_name,"SAVE"));
     return target?0:1;
 }
-int orbis_SaveDelete(const save_entry_t *s)
+int orbis_SaveDeleteStatus(const save_entry_t *s,int *sdk_status)
 {
     assert(!mounted && !strcmp(s->title_id,"CUSA12345"));
-    delete_calls++;target=0;return 1;
+    if (sdk_status) *sdk_status=sdk_delete_failure?-1234:0;
+    delete_calls++;
+    if (sdk_delete_failure) return 0;
+    target=0;return 1;
 }
 int google_backup_stage(google_backup *b,int (*cancel)(void*),void *data)
 {
@@ -85,6 +96,16 @@ int main(void)
     assert(target && !mounted && import_calls==2);
     target=0;mode=0;int blocked=0;
     assert(google_replace_recover_local(42,&blocked)==GOOGLE_REPLACE_ROLLED_BACK && target && !blocked);
+    assert(!strcmp(sdk_delete_status,""));
+    target=1;
+    assert(google_replace_recover_local(42,&blocked)==GOOGLE_REPLACE_ROLLED_BACK && target && !blocked);
+    assert(!strcmp(sdk_delete_status,"result=0"));
+    assert(!strcmp(delete_absence_status,"result=1"));
+    replace_context recovery={.user=42,.recovering=1};
+    google_backup retained={.user=42};strcpy(retained.title,"CUSA12345");strcpy(retained.directory,"SAVE");
+    sdk_delete_failure=1;
+    assert(!delete_target(&recovery,&retained) && target);
+    assert(!strcmp(sdk_delete_status,"result=-1234"));
     assert(!b.replace_trace);
     puts("Google PS4 replacement adapter tests passed (unmount before upload, explicit delete/import, recovery).");
     return 0;

@@ -69,8 +69,10 @@ static int import_archive(void *unused,google_backup *b,int recovery)
 {
     (void)unused;import_calls++;
     char phase[112];
-    assert(google_replace_last_phase(42,phase,sizeof(phase)) &&
-        !strcmp(phase,recovery?"rollback: before":"import: before"));
+    assert(google_replace_last_phase(42,phase,sizeof(phase)));
+    assert(recovery?(!strcmp(phase,"rollback target delete: result=1") ||
+                     !strcmp(phase,"rollback target presence: result=0")):
+                    !strcmp(phase,"import: before"));
     assert(target==ABSENT);
     if (!recovery && create_fail) return 0;
     if ((recovery && rollback_fail) || (!recovery && import_fail)) {
@@ -121,6 +123,13 @@ static void assert_retained(void)
     }
     closedir(root);assert(found==1);
 }
+static void assert_phase_contains(const char *expected)
+{
+    FILE *f=fopen(GOOGLE_REPLACE_ROOT "phase-0000002a.log","rb");assert(f);
+    char content[8192];size_t size=fread(content,1,sizeof(content)-1,f);
+    assert(!ferror(f) && !fclose(f));content[size]=0;
+    assert(strstr(content,expected));
+}
 int main(void)
 {
     setup();validate_fail=1;
@@ -148,6 +157,7 @@ int main(void)
     assert(google_replace_recover(42,&io)==GOOGLE_REPLACE_ROLLED_BACK && target==OLD);
     setup();delete_fail=1;
     assert(google_replace_start(&selected,&io)==GOOGLE_REPLACE_ROLLED_BACK && target==OLD && delete_calls==2);
+    assert_phase_contains("rollback target delete: result=1");
     assert_retained();assert(google_replace_pending(42,NULL)==0);
     setup();import_fail=1;
     assert(google_replace_start(&selected,&io)==GOOGLE_REPLACE_ROLLED_BACK && target==OLD && import_calls==2);
@@ -156,6 +166,11 @@ int main(void)
     setup();import_fail=rollback_fail=1;
     assert(google_replace_start(&selected,&io)==GOOGLE_REPLACE_NEEDS_RECOVERY && target==PARTIAL);
     assert(google_replace_last_phase(42,phase,sizeof(phase)) && !strcmp(phase,"rollback: after failed"));
+    assert_phase_contains("rollback ZIP validation: result=1");
+    assert_phase_contains("rollback journal checkpoint: result=1 errno=0");
+    assert_phase_contains("rollback target presence: result=1");
+    assert_phase_contains("rollback ZIP import: result=0");
+    assert_phase_contains("rollback failure checkpoint: result=1 errno=0");
     assert_retained();assert(google_replace_pending(42,NULL)==1);
     rollback_fail=0;
     assert(google_replace_recover(42,&io)==GOOGLE_REPLACE_ROLLED_BACK && target==OLD);

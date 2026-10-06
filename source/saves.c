@@ -33,7 +33,7 @@
 #define CHAR_ICON_WARN		"\x0F"
 
 
-int orbis_SaveDelete(const save_entry_t *save)
+int orbis_SaveDeleteStatus(const save_entry_t *save, int *sdk_status)
 {
 	OrbisSaveDataDelete del;
 	OrbisSaveDataDirName dir;
@@ -49,12 +49,19 @@ int orbis_SaveDelete(const save_entry_t *save)
 	del.dirName = &dir;
 	del.titleId = &title;
 
-	if (sceSaveDataDelete(&del) < 0) {
-		LOG("DELETE_ERROR");
+	int result = sceSaveDataDelete(&del);
+	if (sdk_status) *sdk_status = result;
+	if (result < 0) {
+		LOG("DELETE_ERROR (%X)", result);
 		return 0;
 	}
 
 	return 1;
+}
+
+int orbis_SaveDelete(const save_entry_t *save)
+{
+	return orbis_SaveDeleteStatus(save, NULL);
 }
 
 int orbis_SaveUmount(const char* mountPath)

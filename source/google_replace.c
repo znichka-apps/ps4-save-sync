@@ -253,13 +253,27 @@ int google_replace_pending(uint32_t user,google_backup *source)
     return result;
 }
 static int never_cancel(void *unused) { (void)unused; return 0; }
+static void rollback_status(uint32_t user,const char *step,int result,int error,const char *detail)
+{
+    char status[80];
+    if (detail && *detail)
+        snprintf(status,sizeof(status),"result=%d %.58s",result,detail);
+    else if (error>=0) snprintf(status,sizeof(status),"result=%d errno=%d",result,error);
+    else snprintf(status,sizeof(status),"result=%d",result);
+    google_replace_phase(user,step,status);
+}
 static int recover_record(const char *dir,journal *j,const google_replace_io *io)
 {
     google_backup rollback;
     as_backup(j,dir,1,&rollback);
-    if (google_restore_validate(&rollback,never_cancel,NULL)!=GOOGLE_UPLOAD_SUCCESS) return GOOGLE_REPLACE_NEEDS_RECOVERY;
+    google_replace_phase(j->user,"rollback ZIP validation","before");
+    int validated=google_restore_validate(&rollback,never_cancel,NULL);
+    int saved_errno;
+    rollback_status(j->user,"rollback ZIP validation",validated,-1,rollback.diagnostic);
+    if (validated!=GOOGLE_UPLOAD_SUCCESS) return GOOGLE_REPLACE_NEEDS_RECOVERY;
     if (j->phase==PREPARED || j->phase==UPLOADED) {
         int present=io->present(io->data,&rollback);
+        rollback_status(j->user,"rollback preflight presence",present,-1,NULL);
         if (present==1) {
             google_replace_phase(j->user,"rollback","before");
             google_replace_phase(j->user,"rollback","after already present");
@@ -272,11 +286,22 @@ static int recover_record(const char *dir,journal *j,const google_replace_io *io
         if (present<0) return GOOGLE_REPLACE_NEEDS_RECOVERY;
     }
     j->phase=RECOVERING;
-    if (!write_journal(dir,j)) return GOOGLE_REPLACE_NEEDS_RECOVERY;
+    int checkpoint=write_journal(dir,j);
+    saved_errno=checkpoint?0:errno;
+    rollback_status(j->user,"rollback journal checkpoint",checkpoint,saved_errno,NULL);
+    if (!checkpoint) return GOOGLE_REPLACE_NEEDS_RECOVERY;
     google_replace_phase(j->user,"rollback","before");
     int present=io->present(io->data,&rollback);
-    if (present<0 || (present==1 && !io->delete_target(io->data,&rollback))) goto failed;
-    if (!io->import_archive(io->data,&rollback,1)) goto failed;
+    rollback_status(j->user,"rollback target presence",present,-1,NULL);
+    if (present<0) goto failed;
+    if (present==1) {
+        int deleted=io->delete_target(io->data,&rollback);
+        rollback_status(j->user,"rollback target delete",deleted,-1,NULL);
+        if (!deleted) goto failed;
+    }
+    int imported=io->import_archive(io->data,&rollback,1);
+    rollback_status(j->user,"rollback ZIP import",imported,-1,rollback.diagnostic);
+    if (!imported) goto failed;
     google_replace_phase(j->user,"rollback","after ok");
     j->phase=RECOVERED;
     if (!write_journal(dir,j)) return GOOGLE_REPLACE_NEEDS_RECOVERY;
@@ -284,9 +309,11 @@ static int recover_record(const char *dir,journal *j,const google_replace_io *io
     google_replace_phase(j->user,"journal cleanup","after retained");
     return GOOGLE_REPLACE_ROLLED_BACK;
 failed:
-    google_replace_phase(j->user,"rollback","after failed");
     j->phase=RECOVERY_FAILED;
-    (void)write_journal(dir,j);
+    int recorded=write_journal(dir,j);
+    saved_errno=recorded?0:errno;
+    rollback_status(j->user,"rollback failure checkpoint",recorded,saved_errno,NULL);
+    google_replace_phase(j->user,"rollback","after failed");
     return GOOGLE_REPLACE_NEEDS_RECOVERY;
 }
 int google_replace_recover(uint32_t user,const google_replace_io *io)
