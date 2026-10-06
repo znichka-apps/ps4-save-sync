@@ -5,6 +5,7 @@
 #include <stdlib.h>
 #include <sys/stat.h>
 #include <unistd.h>
+#include <errno.h>
 #include "common.h"
 
 static int fail_copy_buffer;
@@ -47,6 +48,7 @@ int main(void)
     f=fopen(blocker,"wb"); assert(f); assert(!fclose(f));
     assert(copy_directory("build/host/copy-cleanup/source/",
         "build/host/copy-cleanup/source/","build/host/copy-cleanup/blocker/")==FAILED);
+    assert(errno==ENOTDIR); /* Failure survives copy_file and recursive DIR cleanup. */
     assert(open_fds()==before); /* Recursive copy failure closes both DIR streams. */
     assert(!unlink("build/host/copy-cleanup/target"));
     assert(!unlink(blocker)); assert(!unlink(input));

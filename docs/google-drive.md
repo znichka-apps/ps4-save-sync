@@ -440,6 +440,17 @@ has its own phase record. `rollback: after failed` is a summary marker and
 cannot by itself identify which operation failed. The optional debug log is
 `/data/ps4-save-sync/apollo.log`.
 
+During replacement or recovery import, the same phase log records `import scan`,
+`import target absence`, `import mount`, `import copy`, `import metadata`,
+`import ownership`, `import unmount`, and `import adapter` results as the steps
+run. Each result includes the call name and an errno captured immediately after
+the call; `errno=0` means the failed operation did not provide a POSIX errno.
+For a composed Apollo helper, the named call identifies the failed import step;
+its errno alone may not identify an inner SDK operation.
+The scan result distinguishes a missing staged `param.sfo` from a scanner match
+failure. Later steps are absent when an earlier step stops the import, except
+that unmount is still attempted after a successful mount.
+
 ### Disposable-save replacement test on PS4
 
 1. Close the game. Use a disposable save with known old progress on the target

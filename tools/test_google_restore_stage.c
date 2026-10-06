@@ -11,7 +11,7 @@
 #include "google_restore.h"
 
 static google_backup backup;
-static int cancel_after, cancel_calls, absent_calls, target_reject_at, target_status, imports, cleanup_failure, expect_root_file;
+static int cancel_after, cancel_calls, absent_calls, target_reject_at, target_status, imports, cleanup_failure, expect_root_file, import_failure;
 enum { SFO_OK, SFO_SHORT, SFO_MAGIC, SFO_VERSION, SFO_COUNT, SFO_TABLE, SFO_KEY_OFFSET, SFO_INDEX_OFFSET,
     SFO_AGGREGATE, SFO_LONG_KEY, SFO_DUPLICATE,
     SFO_STRING_END, SFO_TITLE_MISMATCH, SFO_DIRECTORY_MISMATCH, SFO_BLOCKS_LOW, SFO_BLOCKS_HIGH,
@@ -115,7 +115,9 @@ static int import_staged(void *p,const google_backup *b,const char *stage) {
         snprintf(path,sizeof(path),"%s/PS4/APOLLO/SAVE/root.bin",stage);
         f=fopen(path,"rb");assert(f);assert(fread(data,1,3,f)==3&&!fclose(f)&&!strncmp(data,"bad",3));
     }
-    imports++;return 1;
+    imports++;
+    if (import_failure) { errno=ENOENT; return 0; }
+    return 1;
 }
 static int finish(void *p) { (void)p;return !cancelled(NULL); }
 int __real_rmdir(const char *);
@@ -132,7 +134,7 @@ static void clear_tree(const char *p) {
     closedir(d);rmdir(p);
 }
 static void reset(void) {
-    cancel_after=cancel_calls=absent_calls=target_reject_at=imports=cleanup_failure=expect_root_file=0;
+    cancel_after=cancel_calls=absent_calls=target_reject_at=imports=cleanup_failure=expect_root_file=import_failure=0;
     target_status=1;
     sfo_case=SFO_OK;
     clear_tree(backup.temp_dir);strcpy(backup.temp_dir,GOOGLE_BACKUP_CACHE "drive-XXXXXX");assert(mkdtemp(backup.temp_dir));
@@ -158,6 +160,10 @@ int main(void) {
     int first=google_restore_run(&backup,&io);
     if(first!=GOOGLE_UPLOAD_SUCCESS)fprintf(stderr,"restore stage failed: %s\n",backup.diagnostic);
     assert(first==GOOGLE_UPLOAD_SUCCESS);
+    reset();fixture(NULL,0100000,1);import_failure=1;
+    assert(google_restore_run(&backup,&io)==GOOGLE_UPLOAD_FAILED&&imports==1);
+    assert(strstr(backup.diagnostic,"Google restore failed [op=10 errno=2 zip=0]"));
+    assert(access(backup.archive,F_OK)==0);
     assert(imports==1&&absent_calls==2&&access(backup.archive,F_OK)==0);
     assert(access("build/host/cache/no-such-stage",F_OK));
 

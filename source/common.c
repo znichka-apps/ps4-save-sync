@@ -6,6 +6,7 @@
 #include <sys/file.h>
 #include <sys/stat.h>
 #include <dirent.h>
+#include <errno.h>
 #include <zlib.h>
 #include <orbis/SystemService.h>
 
@@ -136,7 +137,9 @@ int copy_file(const char* input, const char* output)
 
     if((fd2 = fopen(output, "wb")) == NULL)
     {
+		int error = errno;
         fclose(fd);
+		errno = error;
         return FAILED;
     }
 
@@ -144,24 +147,32 @@ int copy_file(const char* input, const char* output)
 
     if (!buffer)
     {
+		int error = ENOMEM;
         fclose(fd2);
         fclose(fd);
+		errno = error;
         return FAILED;
     }
 
+    int failed = 0, error = 0;
     do
     {
         read = fread(buffer, 1, TMP_BUFF_SIZE, fd);
         written = fwrite(buffer, 1, read, fd2);
+        if (read != written || ferror(fd) || ferror(fd2)) {
+            failed = 1;
+            error = errno ? errno : EIO;
+            break;
+        }
     }
-    while ((read == written) && (read == TMP_BUFF_SIZE));
+    while (read == TMP_BUFF_SIZE);
 
     free(buffer);
-    fclose(fd);
-    fclose(fd2);
+    if (fclose(fd) && !failed) { failed = 1; error = errno; }
+    if (fclose(fd2) && !failed) { failed = 1; error = errno; }
     chmod(output, 0777);
-
-    return (read - written);
+	if (failed) { errno = error; return FAILED; }
+    return SUCCESS;
 }
 
 uint32_t file_crc32(const char* input)
@@ -208,13 +219,17 @@ int copy_directory(const char* startdir, const char* inputdir, const char* outpu
             if (dirp->d_type == DT_DIR) {
                 strcat(fullname, "/");
                 if (copy_directory(startdir, fullname, outputdir) != SUCCESS) {
+					int error = errno;
                     closedir(dp);
+					errno = error;
                     return FAILED;
                 }
             } else {
                 snprintf(out_name, sizeof(out_name), "%s%s", outputdir, &fullname[len]);
                 if (copy_file(fullname, out_name) != SUCCESS) {
+					int error = errno;
                     closedir(dp);
+					errno = error;
                     return FAILED;
                 }
             }

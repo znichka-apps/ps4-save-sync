@@ -2,9 +2,11 @@
    normal USB save scanner and HDD copy/resign implementation. */
 #include <stdio.h>
 #include <string.h>
+#include <errno.h>
 #include "saves.h"
 #include "settings.h"
 #include "google_restore.h"
+#include "google_replace.h"
 
 typedef struct {
     uint32_t user;
@@ -39,13 +41,23 @@ static int import_staged(void *p,const google_backup *b,const char *stage)
     int mount_blocked=0;
     /* IDs in the decrypted SFO are used only for title/directory matching.
        Apollo's HDD copy path resigns the destination to this local user. */
-    int ok=!cancel(p) && orbis_ImportStagedSave(stage,b->title,b->directory,c->user,cancel,p,&mount_blocked,
+    int allowed=!cancel(p);
+    errno=0;
+    int ok=allowed && orbis_ImportStagedSave(stage,b->title,b->directory,c->user,cancel,p,&mount_blocked,
         b->replace_trace?b->user:0);
+    int import_error=errno;
+    if (b->replace_trace) {
+        char detail[64];
+        snprintf(detail,sizeof(detail),"result=%d errno=%d call=%s",ok,ok?0:import_error,
+            allowed?"ImportStagedSave":"cancel");
+        google_replace_phase(b->user,"import adapter",detail);
+    }
     if (mount_blocked) {
         ((google_backup*)b)->mount_blocked=1;
         snprintf(((google_backup*)b)->diagnostic,sizeof(b->diagnostic),
             "Save unmount failed after staged import. Restart the app; downloaded ZIP retained.");
     }
+    errno=import_error;
     return ok;
 }
 
