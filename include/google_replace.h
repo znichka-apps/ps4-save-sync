@@ -27,6 +27,9 @@ enum {
 
 /* Pending returns 1 for a recoverable journal, 0 for none, -1 for unsafe/ambiguous state. */
 int google_replace_pending(uint32_t user, google_backup *source);
+/* Each event is appended and fsynced under GOOGLE_REPLACE_ROOT. */
+void google_replace_phase(uint32_t user, const char *phase, const char *step);
+int google_replace_last_phase(uint32_t user, char *out, size_t capacity);
 int google_replace_start(google_backup *source, const google_replace_io *io);
 int google_replace_recover(uint32_t user, const google_replace_io *io);
 int google_replace_local(google_backup *, const google_upload_io *, int (*)(void *), int (*)(void *), void *);

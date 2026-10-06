@@ -23,6 +23,12 @@ cc -std=gnu11 -Wall -Wextra -Werror -Wno-deprecated-declarations -fsanitize=addr
   source/google_save.c source/google_backup.c source/save_zip.c -lzip -lmbedcrypto \
   -Wl,--wrap=mkdtemp,--wrap=time -o build/host/test_google_save
 build/host/test_google_save
+cc -std=gnu11 -Wall -Wextra -Werror -Wno-deprecated-declarations -fsanitize=address,undefined -g \
+  -D__PS4__ -DGOOGLE_BACKUP_CACHE='"build/host/cache/"' \
+  -Itools/upload_host_include -Itools/host_include -Iinclude tools/test_google_save.c \
+  source/google_save.c source/google_backup.c source/save_zip.c -lzip -lmbedcrypto \
+  -Wl,--wrap=mkdtemp,--wrap=time -o build/host/test_google_save_ps4
+build/host/test_google_save_ps4
 for platform in host ps4; do
   platform_flag=''
   if [ "$platform" = ps4 ]; then platform_flag='-D__PS4__'; fi
@@ -71,3 +77,8 @@ cc -std=gnu11 -Wall -Wextra -Werror -fsanitize=address,undefined -g -D__PS4__ \
   -Itools/restore_host_include -Itools/host_include -Iinclude \
   tools/test_google_replace_ps4.c -o build/host/test_google_replace_ps4
 build/host/test_google_replace_ps4
+
+cc -std=gnu11 -Wall -Wextra -Werror -fsanitize=address,undefined -g \
+  -Itools/restore_host_include -Iinclude tools/test_copy_cleanup.c source/common.c \
+  -Wl,--wrap=malloc -lz -o build/host/test_copy_cleanup
+build/host/test_copy_cleanup

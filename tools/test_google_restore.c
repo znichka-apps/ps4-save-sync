@@ -40,7 +40,7 @@ static void make_sfo(const char *title,const char *directory,int malformed) {
     for (unsigned i=0;i<9;i++) {
         unsigned char *e=sfo+20+i*16; unsigned len=4, format=0x404;
         if (i==0 || i==1 || (i>=5 && i<=7)) { len=strlen(i==0?title:i==1?directory:"Fixture")+1; format=0x204; }
-        if (i==3) { len=8; format=4; }
+        if (i==2 || i==3) { len=8; format=4; }
         if (i==4) { len=0x400; format=4; }
         put16(e,k); put16(e+2,format); put32(e+4,len); put32(e+8,len); put32(e+12,v);
         strcpy((char*)sfo+keyoff+k,keys[i]); k+=strlen(keys[i])+1;

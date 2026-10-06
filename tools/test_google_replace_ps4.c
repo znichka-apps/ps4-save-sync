@@ -3,6 +3,7 @@
 #include <string.h>
 #include "saves.h"
 #include "google_replace.h"
+#include "save_scan_path.h"
 #include "../source/google_replace_ps4.c"
 
 app_config_t apollo_config={.user_id=42};
@@ -19,6 +20,7 @@ int orbis_SaveDelete(const save_entry_t *s)
 }
 int google_backup_stage(google_backup *b,int (*cancel)(void*),void *data)
 {
+    assert(b->replace_trace);
     assert(!cancel(data) && !mounted && target);
     mounted=1;
     assert(!strcmp(b->title,"CUSA12345") && b->user==42);
@@ -32,7 +34,7 @@ int google_upload_run(const google_backup *b,const google_upload_io *io)
 }
 int google_restore_local(google_backup *b,int (*cancel)(void*),int (*finish)(void*),void *data)
 {
-    (void)b;
+    assert(b->replace_trace);
     assert(!mounted && !target && !cancel(data));
     mounted=1;import_calls++;mounted=0;
     if (mode==3 && import_calls==1) return GOOGLE_UPLOAD_FAILED;
@@ -61,9 +63,18 @@ static int no_cancel(void *p) { (void)p;return 0; }
 static int begin(void *p) { (void)p;commit_calls++;return 1; }
 int main(void)
 {
+    char scan[SAVE_SCAN_PATH_CAP];
+    assert(save_scan_path(scan,GOOGLE_REPLACE_ROOT "tx-XXXXXX/stage-source/","PS4/APOLLO/"));
+    assert(!strcmp(scan,GOOGLE_REPLACE_ROOT "tx-XXXXXX/stage-source/PS4/APOLLO/"));
+    assert(save_scan_path(scan,GOOGLE_REPLACE_ROOT "tx-XXXXXX/stage-rollback/","PS4/APOLLO/"));
+    assert(!strcmp(scan,GOOGLE_REPLACE_ROOT "tx-XXXXXX/stage-rollback/PS4/APOLLO/"));
+    char too_long[SAVE_SCAN_PATH_CAP+1];
+    memset(too_long,'x',sizeof(too_long)-1);too_long[sizeof(too_long)-1]=0;
+    assert(!save_scan_path(scan,too_long,"PS4/APOLLO/"));
     google_backup b={.user=42};strcpy(b.title,"CUSA12345");strcpy(b.directory,"SAVE");
     google_upload_io network={0};
     assert(google_replace_local(&b,&network,no_cancel,begin,NULL)==GOOGLE_REPLACE_SUCCESS);
+    assert(!b.replace_trace);
     assert(target && !mounted && upload_calls==1 && delete_calls==1 && import_calls==1 && commit_calls==1);
     mode=1;assert(google_replace_local(&b,&network,no_cancel,begin,NULL)==GOOGLE_REPLACE_FAILED);
     assert(upload_calls==1 && delete_calls==1 && target);
@@ -74,6 +85,7 @@ int main(void)
     assert(target && !mounted && import_calls==2);
     target=0;mode=0;int blocked=0;
     assert(google_replace_recover_local(42,&blocked)==GOOGLE_REPLACE_ROLLED_BACK && target && !blocked);
+    assert(!b.replace_trace);
     puts("Google PS4 replacement adapter tests passed (unmount before upload, explicit delete/import, recovery).");
     return 0;
 }

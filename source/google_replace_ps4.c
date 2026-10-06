@@ -40,7 +40,9 @@ static int present(void *p,const google_backup *b)
 static int stage_backup(void *p,google_backup *b)
 {
     replace_context *c=p;
+    b->replace_trace=1;
     int ok=!cancelled(p) && google_backup_stage(b,cancelled,p);
+    b->replace_trace=0;
     if (b->mount_blocked && c->mount_blocked) *c->mount_blocked=1;
     return ok;
 }
@@ -60,7 +62,9 @@ static int import_archive(void *p,google_backup *b,int recovery)
 {
     replace_context *c=p;
     if (c->user!=apollo_config.user_id || b->user!=c->user) return 0;
+    b->replace_trace=1;
     int result=google_restore_local(b,recovery?never_cancel:cancelled,completed,p);
+    b->replace_trace=0;
     if (b->mount_blocked && c->mount_blocked) *c->mount_blocked=1;
     return result==GOOGLE_UPLOAD_SUCCESS;
 }

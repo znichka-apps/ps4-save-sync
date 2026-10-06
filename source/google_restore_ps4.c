@@ -39,7 +39,8 @@ static int import_staged(void *p,const google_backup *b,const char *stage)
     int mount_blocked=0;
     /* IDs in the decrypted SFO are used only for title/directory matching.
        Apollo's HDD copy path resigns the destination to this local user. */
-    int ok=!cancel(p) && orbis_ImportStagedSave(stage,b->title,b->directory,c->user,cancel,p,&mount_blocked);
+    int ok=!cancel(p) && orbis_ImportStagedSave(stage,b->title,b->directory,c->user,cancel,p,&mount_blocked,
+        b->replace_trace?b->user:0);
     if (mount_blocked) {
         ((google_backup*)b)->mount_blocked=1;
         snprintf(((google_backup*)b)->diagnostic,sizeof(b->diagnostic),

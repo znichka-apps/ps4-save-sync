@@ -102,6 +102,56 @@ static int private_root(int create)
     }
     return 1;
 }
+static int phase_path(uint32_t user,char *path,size_t cap)
+{
+    int n=snprintf(path,cap,GOOGLE_REPLACE_ROOT "phase-%08x.log",user);
+    return n>0 && (size_t)n<cap;
+}
+void google_replace_phase(uint32_t user,const char *phase,const char *step)
+{
+    char path[256],line[112]; struct stat st;
+    if (!user || !phase || !step || !private_root(1) ||
+        !phase_path(user,path,sizeof(path))) return;
+    int n=snprintf(line,sizeof(line),"%s: %s\n",phase,step);
+    if (n<=0 || (size_t)n>=sizeof(line)) return;
+    int fd=open(path,O_WRONLY|O_CREAT|O_APPEND|O_NOFOLLOW,0600);
+    if (fd<0) return;
+    int ok=fstat(fd,&st)==0 && S_ISREG(st.st_mode) && st.st_nlink==1 &&
+        st.st_uid==geteuid() && !(st.st_mode&077) && full_write(fd,line,(size_t)n) && fsync(fd)==0;
+    if (close(fd)) ok=0;
+    if (ok) (void)sync_directory(GOOGLE_REPLACE_ROOT);
+}
+int google_replace_last_phase(uint32_t user,char *out,size_t capacity)
+{
+    char path[256],line[112]; struct stat st;
+    if (!out || !capacity) return 0;
+    out[0]=0;
+    if (!user || !phase_path(user,path,sizeof(path))) return 0;
+    int fd=open(path,O_RDONLY|O_NOFOLLOW|O_NONBLOCK);
+    if (fd<0) return 0;
+    int ok=fstat(fd,&st)==0 && S_ISREG(st.st_mode) && st.st_nlink==1 &&
+        st.st_uid==geteuid() && !(st.st_mode&077) && st.st_size>0;
+    if (ok) {
+        off_t start=st.st_size>(off_t)(sizeof(line)-1)?st.st_size-(off_t)(sizeof(line)-1):0;
+        ssize_t count=lseek(fd,start,SEEK_SET)==start?read(fd,line,sizeof(line)-1):-1;
+        ok=count>0;
+        if (ok) {
+            line[count]=0;
+            char *end=strrchr(line,'\n');
+            if (!end) ok=0;
+            else {
+                *end=0;
+                char *begin=strrchr(line,'\n');
+                begin=begin?begin+1:line;
+                if (start && begin==line) ok=0;
+                else if (strlen(begin)>=capacity) ok=0;
+                else snprintf(out,capacity,"%s",begin);
+            }
+        }
+    }
+    if (close(fd)) ok=0;
+    return ok;
+}
 static int transaction_path(char *out,size_t cap,const char *dir,const char *leaf)
 {
     int n=snprintf(out,cap,"%s/%s",dir,leaf);
@@ -211,19 +261,30 @@ static int recover_record(const char *dir,journal *j,const google_replace_io *io
     if (j->phase==PREPARED || j->phase==UPLOADED) {
         int present=io->present(io->data,&rollback);
         if (present==1) {
+            google_replace_phase(j->user,"rollback","before");
+            google_replace_phase(j->user,"rollback","after already present");
             j->phase=RECOVERED;
-            return write_journal(dir,j)?GOOGLE_REPLACE_ROLLED_BACK:GOOGLE_REPLACE_NEEDS_RECOVERY;
+            if (!write_journal(dir,j)) return GOOGLE_REPLACE_NEEDS_RECOVERY;
+            google_replace_phase(j->user,"journal cleanup","before");
+            google_replace_phase(j->user,"journal cleanup","after retained");
+            return GOOGLE_REPLACE_ROLLED_BACK;
         }
         if (present<0) return GOOGLE_REPLACE_NEEDS_RECOVERY;
     }
     j->phase=RECOVERING;
     if (!write_journal(dir,j)) return GOOGLE_REPLACE_NEEDS_RECOVERY;
+    google_replace_phase(j->user,"rollback","before");
     int present=io->present(io->data,&rollback);
     if (present<0 || (present==1 && !io->delete_target(io->data,&rollback))) goto failed;
     if (!io->import_archive(io->data,&rollback,1)) goto failed;
+    google_replace_phase(j->user,"rollback","after ok");
     j->phase=RECOVERED;
-    return write_journal(dir,j)?GOOGLE_REPLACE_ROLLED_BACK:GOOGLE_REPLACE_NEEDS_RECOVERY;
+    if (!write_journal(dir,j)) return GOOGLE_REPLACE_NEEDS_RECOVERY;
+    google_replace_phase(j->user,"journal cleanup","before");
+    google_replace_phase(j->user,"journal cleanup","after retained");
+    return GOOGLE_REPLACE_ROLLED_BACK;
 failed:
+    google_replace_phase(j->user,"rollback","after failed");
     j->phase=RECOVERY_FAILED;
     (void)write_journal(dir,j);
     return GOOGLE_REPLACE_NEEDS_RECOVERY;
@@ -251,11 +312,14 @@ int google_replace_start(google_backup *source,const google_replace_io *io)
     snprintf(rollback.title,sizeof(rollback.title),"%s",source->title);
     snprintf(rollback.directory,sizeof(rollback.directory),"%s",source->directory);
     rollback.user=source->user;
+    google_replace_phase(source->user,"rollback staging","before");
     if (!io->stage_backup(io->data,&rollback)) {
+        google_replace_phase(source->user,"rollback staging","after failed");
         diagnostic(source,rollback.mount_blocked?"backup unmount failed; restart app":"rollback backup could not be staged");
         source->mount_blocked=rollback.mount_blocked;
         return io->cancelled(io->data)?GOOGLE_REPLACE_CANCELLED:GOOGLE_REPLACE_FAILED;
     }
+    google_replace_phase(source->user,"rollback staging","after ok");
     if (google_restore_validate(&rollback,io->cancelled,io->data)!=GOOGLE_UPLOAD_SUCCESS) {
         diagnostic(source,"rollback ZIP did not pass validation");
         return io->cancelled(io->data)?GOOGLE_REPLACE_CANCELLED:GOOGLE_REPLACE_FAILED;
@@ -297,13 +361,24 @@ int google_replace_start(google_backup *source,const google_replace_io *io)
     }
     j.phase=DELETING;
     if (!write_journal(dir,&j)) { diagnostic(source,"journal sync failed; target unchanged"); return GOOGLE_REPLACE_FAILED; }
+    google_replace_phase(j.user,"target delete","before");
     if (!io->delete_target(io->data,source)) goto rollback_attempt;
+    google_replace_phase(j.user,"target delete","after ok");
     j.phase=IMPORTING;
-    if (!write_journal(dir,&j) || !io->import_archive(io->data,&source_copy,0)) goto rollback_attempt;
+    if (!write_journal(dir,&j)) goto rollback_attempt;
+    google_replace_phase(j.user,"import","before");
+    if (!io->import_archive(io->data,&source_copy,0)) {
+        google_replace_phase(j.user,"import","after failed");
+        goto rollback_attempt;
+    }
+    google_replace_phase(j.user,"import","after ok");
     j.phase=COMPLETE;
     if (!write_journal(dir,&j)) { diagnostic(source,"save imported but completion journal failed; recovery pending"); return GOOGLE_REPLACE_NEEDS_RECOVERY; }
+    google_replace_phase(j.user,"journal cleanup","before");
+    google_replace_phase(j.user,"journal cleanup","after retained");
     return GOOGLE_REPLACE_SUCCESS;
 rollback_attempt:
+    if (j.phase==DELETING) google_replace_phase(j.user,"target delete","after failed");
     if (source_copy.mount_blocked) {
         source->mount_blocked=1;
         diagnostic(source,"import unmount failed; restart before recovery");

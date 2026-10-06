@@ -22,6 +22,7 @@
 #include "google_drive.h"
 #include "save_zip.h"
 #include "restore_fs.h"
+#include "google_replace.h"
 
 static char host_buf[256];
 
@@ -288,7 +289,7 @@ static void downloadSaveHDD(const save_entry_t* entry, const char* file)
 	orbis_SaveUmount(mount);
 }
 
-static int _copy_save_hdd(const save_entry_t* save, uint32_t empty_user, int *mount_blocked)
+static int _copy_save_hdd(const save_entry_t* save, uint32_t empty_user, int *mount_blocked, uint32_t trace_user)
 {
 	int ret;
 	char copy_path[256];
@@ -300,8 +301,11 @@ static int _copy_save_hdd(const save_entry_t* save, uint32_t empty_user, int *mo
 	};
 
 	if (mount_blocked) *mount_blocked = 0;
-	if (!(empty_user ? orbis_SaveMountEmpty(save, empty_user, mount) :
-		orbis_SaveMount(save, ORBIS_SAVE_DATA_MOUNT_MODE_RDWR | ORBIS_SAVE_DATA_MOUNT_MODE_CREATE2 | ORBIS_SAVE_DATA_MOUNT_MODE_COPY_ICON, mount)))
+	if (trace_user) google_replace_phase(trace_user,"target mount","before");
+	int mounted = empty_user ? orbis_SaveMountEmpty(save, empty_user, mount) :
+		orbis_SaveMount(save, ORBIS_SAVE_DATA_MOUNT_MODE_RDWR | ORBIS_SAVE_DATA_MOUNT_MODE_CREATE2 | ORBIS_SAVE_DATA_MOUNT_MODE_COPY_ICON, mount);
+	if (trace_user) google_replace_phase(trace_user,"target mount",mounted?"after ok":"after failed");
+	if (!mounted)
 		return 0;
 
 	snprintf(copy_path, sizeof(copy_path), APOLLO_SANDBOX_PATH, mount);
@@ -327,13 +331,16 @@ static int _copy_save_hdd(const save_entry_t* save, uint32_t empty_user, int *mo
 		snprintf(copy_path, sizeof(copy_path), APOLLO_SANDBOX_PATH "sce_sys/param.sfo", mount);
 		ok = patch_sfo(copy_path, &patch) >= 0;
 	}
-	if (!orbis_SaveUmount(mount)) { ok = 0; if (mount_blocked) *mount_blocked = 1; }
+	if (trace_user) google_replace_phase(trace_user,"unmount","before");
+	int unmounted = orbis_SaveUmount(mount);
+	if (trace_user) google_replace_phase(trace_user,"unmount",unmounted?"after ok":"after failed");
+	if (!unmounted) { ok = 0; if (mount_blocked) *mount_blocked = 1; }
 
 	return ok;
 }
 
 int orbis_ImportStagedSave(const char *stage, const char *title, const char *directory, uint32_t user,
-	int (*cancelled)(void*), void *data, int *mount_blocked)
+	int (*cancelled)(void*), void *data, int *mount_blocked, uint32_t trace_user)
 {
 	if (mount_blocked) *mount_blocked = 0;
 	if (!stage || !title || !directory || !cancelled || user != apollo_config.user_id ||
@@ -366,7 +373,7 @@ int orbis_ImportStagedSave(const char *stage, const char *title, const char *dir
 	/* This is the final check before the existing HDD copy/resign pipeline.
 	   save_mount(empty=1) repeats it while creating the target. */
 	if (ok) ok = orbis_SaveTargetAbsent(match, user) == 1 && user == apollo_config.user_id && !cancelled(data);
-	if (ok) ok = _copy_save_hdd(match, user, mount_blocked);
+	if (ok) ok = _copy_save_hdd(match, user, mount_blocked, trace_user);
 	UnloadGameList(list);
 	return ok && user == apollo_config.user_id && !cancelled(data);
 }
@@ -446,7 +453,7 @@ static void copySaveHDD(const save_entry_t* save)
 	}
 
 	init_loading_screen(_("Copying save game..."));
-	int ret = _copy_save_hdd(save, 0, NULL);
+	int ret = _copy_save_hdd(save, 0, NULL, 0);
 	stop_loading_screen();
 
 	if (ret)
@@ -476,7 +483,7 @@ static void copyAllSavesHDD(const save_entry_t* save, int all)
 		if (item->flags & SAVE_FLAG_LOCKED)
 			(_copy_save_pfs(item) == SUCCESS) ? done++ : err_count++;
 		else
-			_copy_save_hdd(item, 0, NULL) ? done++ : err_count++;
+			_copy_save_hdd(item, 0, NULL, 0) ? done++ : err_count++;
 	}
 
 	end_progress_bar();

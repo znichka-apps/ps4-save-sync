@@ -19,6 +19,7 @@
 #include "mcio.h"
 #include "ps1card.h"
 #include "sd.h"
+#include "save_scan_path.h"
 
 #define UTF8_CHAR_STAR		"\xE2\x98\x85"
 
@@ -1601,7 +1602,7 @@ list_t * ReadUsbList(const char* userPath)
 	save_entry_t *item;
 	code_entry_t *cmd;
 	list_t *list;
-	char path[64];
+	char path[SAVE_SCAN_PATH_CAP];
 
 	list = list_alloc();
 
@@ -1632,18 +1633,18 @@ list_t * ReadUsbList(const char* userPath)
 	list_append(item->codes, cmd);
 	list_append(list, item);
 
-	snprintf(path, sizeof(path), "%sPS4/APOLLO/", userPath);
-	read_usb_savegames(path, list);
+	if (save_scan_path(path, userPath, "PS4/APOLLO/"))
+		read_usb_savegames(path, list);
 	read_inner_vmc2_files(list);
 
-	snprintf(path, sizeof(path), "%sPS4/SAVEDATA/", userPath);
-	read_usb_encrypted_savegames(path, list);
+	if (save_scan_path(path, userPath, "PS4/SAVEDATA/"))
+		read_usb_encrypted_savegames(path, list);
 
-	snprintf(path, sizeof(path), "%s%s", userPath, VMC_PS2_PATH_USB);
-	scan_vmc_files(path, NULL, list);
+	if (save_scan_path(path, userPath, VMC_PS2_PATH_USB))
+		scan_vmc_files(path, NULL, list);
 
-	snprintf(path, sizeof(path), "%s%s", userPath, VMC_PS1_PATH_USB);
-	scan_vmc_files(path, NULL, list);
+	if (save_scan_path(path, userPath, VMC_PS1_PATH_USB))
+		scan_vmc_files(path, NULL, list);
 
 	return list;
 }

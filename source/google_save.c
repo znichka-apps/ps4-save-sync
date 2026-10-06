@@ -12,6 +12,9 @@
 #include "google_upload.h"
 #include "save_zip.h"
 #include "settings.h"
+#ifdef __PS4__
+#include "google_replace.h"
+#endif
 static int stage_failure(google_backup *b, const char *operation, int error)
 {
     snprintf(b->diagnostic, sizeof(b->diagnostic), "Preparation %s: errno=%d", operation, error);
@@ -40,7 +43,20 @@ int google_backup_stage(google_backup *b, int (*cancel)(void*), void *data)
     save.flags = SAVE_FLAG_PS4 | SAVE_FLAG_HDD; save.type = FILE_TYPE_PS4;
     char mount[ORBIS_SAVE_DATA_DIRNAME_DATA_MAXSIZE], path[256], base[256];
     errno = 0;
-    if (!orbis_SaveMount(&save, ORBIS_SAVE_DATA_MOUNT_MODE_RDONLY, mount)) return stage_failure(b, "mount", errno);
+#ifdef __PS4__
+    uint32_t trace_user=b->replace_trace?b->user:0;
+    if (trace_user) google_replace_phase(trace_user,"rollback mount","before");
+#endif
+    if (!orbis_SaveMount(&save, ORBIS_SAVE_DATA_MOUNT_MODE_RDONLY, mount)) {
+        int mount_error=errno;
+#ifdef __PS4__
+        if (trace_user) google_replace_phase(trace_user,"rollback mount","after failed");
+#endif
+        return stage_failure(b, "mount", mount_error);
+    }
+#ifdef __PS4__
+    if (trace_user) google_replace_phase(trace_user,"rollback mount","after ok");
+#endif
     snprintf(path, sizeof(path), APOLLO_SANDBOX_PATH, mount);
     snprintf(base, sizeof(base), "%s", path);
     /* Match zipSave/FTP exactly: remove trailing slash, then mount component. */
@@ -51,8 +67,16 @@ int google_backup_stage(google_backup *b, int (*cancel)(void*), void *data)
     else if (cancel(data)) ok = stage_failure(b, "cancellation", 0);
     else ok = zip_directory_diagnostic(base, path, b->archive, cancel, data, b->diagnostic, sizeof(b->diagnostic));
     errno = 0;
-    if (!orbis_SaveUmount(mount)) {
-        int error = errno;
+#ifdef __PS4__
+    if (trace_user) google_replace_phase(trace_user,"unmount rollback staging","before");
+#endif
+    int unmounted=orbis_SaveUmount(mount);
+    int unmount_error=errno;
+#ifdef __PS4__
+    if (trace_user) google_replace_phase(trace_user,"unmount rollback staging",unmounted?"after ok":"after failed");
+#endif
+    if (!unmounted) {
+        int error = unmount_error;
         b->mount_blocked = 1; ok = 0;
         /* Preserve the original ZIP error as well as the mandatory restart warning. */
         char prior[sizeof(b->diagnostic)]; snprintf(prior, sizeof(prior), "%s", b->diagnostic);

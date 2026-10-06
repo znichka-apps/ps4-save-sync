@@ -143,7 +143,11 @@ int copy_file(const char* input, const char* output)
     char* buffer = malloc(TMP_BUFF_SIZE);
 
     if (!buffer)
+    {
+        fclose(fd2);
+        fclose(fd);
         return FAILED;
+    }
 
     do
     {
@@ -204,11 +208,13 @@ int copy_directory(const char* startdir, const char* inputdir, const char* outpu
             if (dirp->d_type == DT_DIR) {
                 strcat(fullname, "/");
                 if (copy_directory(startdir, fullname, outputdir) != SUCCESS) {
+                    closedir(dp);
                     return FAILED;
                 }
             } else {
                 snprintf(out_name, sizeof(out_name), "%s%s", outputdir, &fullname[len]);
                 if (copy_file(fullname, out_name) != SUCCESS) {
+                    closedir(dp);
                     return FAILED;
                 }
             }

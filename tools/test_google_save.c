@@ -16,6 +16,22 @@ app_config_t apollo_config = {.user_id = 42};
 static int mounted, mount_calls, unmount_calls, fail_mount, fail_unmount, cancelled_, cancel_during_zip;
 static int fail_cache, fail_temp, fail_time;
 static google_backup backup;
+#ifdef __PS4__
+static int cancel(void *p);
+static google_backup ordinary;
+static int phase_calls, interleave, interleaved;
+void google_replace_phase(uint32_t user,const char *phase,const char *step)
+{
+    assert(user==42 && phase && step);
+    phase_calls++;
+    if (interleave && !interleaved) {
+        interleaved=1;
+        assert(!ordinary.replace_trace);
+        assert(google_backup_stage(&ordinary,cancel,NULL));
+        assert(phase_calls==1); /* Concurrent ordinary save must not inherit Replace tracing. */
+    }
+}
+#endif
 int mkdirs(const char *path) {
     if (fail_cache) { errno=EACCES; return -1; }
     return mkdir(path,0700)==0 || errno==EEXIST ? 0 : -1;
@@ -119,6 +135,13 @@ int main(void)
     unlink("build/host/mount/SAVE_DATA/link"); unlink("build/host/unrelated");
     FILE *fp=fopen("build/host/mount/SAVE_DATA/sce_sys/param.sfo","rb"); assert(fp);
     memset(text,0,sizeof(text)); assert(fread(text,1,sizeof(text),fp)==14 && !strcmp(text,"original-param")); fclose(fp);
+#ifdef __PS4__
+    reset(); ordinary=backup; backup.replace_trace=1;
+    phase_calls=interleaved=0; interleave=1;
+    assert(google_backup_stage(&backup,cancel,NULL));
+    assert(interleaved && phase_calls==4 && !ordinary.replace_trace);
+    assert(google_backup_cleanup(&ordinary) && google_backup_cleanup(&backup)); remove_cache();
+#endif
     puts("Google save staging tests passed (real ZIP layout; mocked mounts; source unchanged).");
     return 0;
 }

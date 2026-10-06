@@ -19,7 +19,7 @@ int save_sqlite_db(void*,const char*);
 int orbis_SaveTargetAbsent(const save_entry_t*,uint32_t);
 int orbis_SaveDelete(const save_entry_t*);
 int orbis_SaveMountEmpty(const save_entry_t*,uint32_t,char*);
-int orbis_ImportStagedSave(const char*,const char*,const char*,uint32_t,int (*)(void*),void*,int*);
+int orbis_ImportStagedSave(const char*,const char*,const char*,uint32_t,int (*)(void*),void*,int*,uint32_t);
 int orbis_SaveUmount(const char*);
 int orbis_UpdateSaveParams(const save_entry_t*,const char*,const char*,const char*,uint32_t);
 #endif

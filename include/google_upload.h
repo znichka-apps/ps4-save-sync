@@ -15,6 +15,7 @@ typedef struct {
     uint32_t user;
     uint64_t size;
     int mount_blocked;
+    int replace_trace; /* Diagnostics for this save operation only. */
 } google_backup;
 typedef struct {
     const char *method, *url, *json, *range;

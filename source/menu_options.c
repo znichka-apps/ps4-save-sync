@@ -121,6 +121,12 @@ int google_drive_ui_frame(void)
             (unsigned long long)status.completed_bytes, (unsigned long long)status.total_bytes,
             (unsigned)(100.0 * status.completed_bytes / status.total_bytes));
     if (status.discovery_details[0]) google_text(status.discovery_details, 440);
+    if (!status.busy && pending!=0) {
+        char last_phase[112];
+        if (!google_replace_last_phase(apollo_config.user_id,last_phase,sizeof(last_phase)))
+            snprintf(last_phase,sizeof(last_phase),"unavailable");
+        DrawFormatString(180,690,"Last Replace phase: %s",last_phase);
+    }
     if (!status.busy && pending==1) {
         DrawFormatString(180,660,"Recovery pending: %s / %s, user %08x",
             pending_backup.title,pending_backup.directory,apollo_config.user_id);

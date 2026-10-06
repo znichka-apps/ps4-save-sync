@@ -38,6 +38,8 @@ static int present(void *unused,const google_backup *b)
 static int stage_backup(void *unused,google_backup *b)
 {
     (void)unused;assert(target==OLD && !upload_calls && !delete_calls);stage_calls++;
+    char phase[112];
+    assert(google_replace_last_phase(42,phase,sizeof(phase)) && !strcmp(phase,"rollback staging: before"));
     if (stage_fail) return 0;
     snprintf(b->temp_dir,sizeof(b->temp_dir),"/tmp/google-replace-stage");
     snprintf(b->archive,sizeof(b->archive),"%s/backup.zip",b->temp_dir);
@@ -66,6 +68,9 @@ static int delete_target(void *unused,const google_backup *b)
 static int import_archive(void *unused,google_backup *b,int recovery)
 {
     (void)unused;import_calls++;
+    char phase[112];
+    assert(google_replace_last_phase(42,phase,sizeof(phase)) &&
+        !strcmp(phase,recovery?"rollback: before":"import: before"));
     assert(target==ABSENT);
     if (!recovery && create_fail) return 0;
     if ((recovery && rollback_fail) || (!recovery && import_fail)) {
@@ -86,7 +91,9 @@ static void remove_fixture(void)
             for (unsigned i=0;i<4;i++) { snprintf(path,sizeof(path),"%s/%s",dir,names[i]);unlink(path); }
             assert(!rmdir(dir));
         }
-        closedir(root);assert(!rmdir(GOOGLE_REPLACE_ROOT));
+        closedir(root);
+        unlink(GOOGLE_REPLACE_ROOT "phase-0000002a.log");
+        assert(!rmdir(GOOGLE_REPLACE_ROOT));
     }
     unlink("/tmp/google-replace-source.zip");unlink("/tmp/google-replace-stage/backup.zip");
 }
@@ -124,6 +131,8 @@ int main(void)
     assert(google_replace_start(&selected,&io)==GOOGLE_REPLACE_FAILED && target==OLD && !stage_calls && !delete_calls);
     setup();stage_fail=1;
     assert(google_replace_start(&selected,&io)==GOOGLE_REPLACE_FAILED && target==OLD && stage_calls==1 && !upload_calls);
+    char phase[112];
+    assert(google_replace_last_phase(42,phase,sizeof(phase)) && !strcmp(phase,"rollback staging: after failed"));
     setup();cancel_now=1;
     assert(google_replace_start(&selected,&io)==GOOGLE_REPLACE_CANCELLED && target==OLD && !delete_calls);
     setup();upload_fail=1;
@@ -146,13 +155,24 @@ int main(void)
     assert(google_replace_start(&selected,&io)==GOOGLE_REPLACE_ROLLED_BACK && target==OLD && import_calls==2);
     setup();import_fail=rollback_fail=1;
     assert(google_replace_start(&selected,&io)==GOOGLE_REPLACE_NEEDS_RECOVERY && target==PARTIAL);
+    assert(google_replace_last_phase(42,phase,sizeof(phase)) && !strcmp(phase,"rollback: after failed"));
     assert_retained();assert(google_replace_pending(42,NULL)==1);
     rollback_fail=0;
     assert(google_replace_recover(42,&io)==GOOGLE_REPLACE_ROLLED_BACK && target==OLD);
     assert(google_replace_pending(42,NULL)==0);
     setup();
     assert(google_replace_start(&selected,&io)==GOOGLE_REPLACE_SUCCESS && target==NEW && import_calls==1);
+    assert(google_replace_last_phase(42,phase,sizeof(phase)) && !strcmp(phase,"journal cleanup: after retained"));
     assert_retained();assert(google_replace_pending(42,NULL)==0);
+    DIR *root=opendir(GOOGLE_REPLACE_ROOT);assert(root);
+    struct dirent *item;char journal_path[340]={0};
+    while ((item=readdir(root))) if (!strncmp(item->d_name,"tx-",3))
+        snprintf(journal_path,sizeof(journal_path),"%s%s/journal",GOOGLE_REPLACE_ROOT,item->d_name);
+    assert(!closedir(root) && journal_path[0]);
+    FILE *damaged=fopen(journal_path,"wb");assert(damaged);
+    assert(fwrite("bad",1,3,damaged)==3 && !fclose(damaged));
+    assert(google_replace_pending(42,NULL)<0);
+    assert(google_replace_last_phase(42,phase,sizeof(phase)) && !strcmp(phase,"journal cleanup: after retained"));
     remove_fixture();
     puts("Google replacement journal tests passed (validation, backup/upload, cancellation, delete/import failure, rollback retry, retained ZIPs).");
     return 0;

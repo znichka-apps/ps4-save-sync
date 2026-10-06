@@ -328,7 +328,7 @@ int orbis_SaveMount(const save_entry_t *save, uint32_t mode, char* mountPath);
 int orbis_SaveTargetAbsent(const save_entry_t *save, uint32_t user);
 int orbis_SaveMountEmpty(const save_entry_t *save, uint32_t user, char* mountPath);
 int orbis_ImportStagedSave(const char *stage, const char *title, const char *directory, uint32_t user,
-	int (*cancelled)(void*), void *data, int *mountBlocked);
+	int (*cancelled)(void*), void *data, int *mountBlocked, uint32_t replaceTraceUser);
 int orbis_SaveDelete(const save_entry_t *save);
 int orbis_UpdateSaveParams(const save_entry_t* save, const char* title, const char* subtitle, const char* details, uint32_t up);
 

@@ -72,12 +72,13 @@ $(INTDIR)/save_zip.o: include/save_zip.h
 $(INTDIR)/google_download.o $(INTDIR)/google_drive.o $(INTDIR)/menu_options.o $(INTDIR)/settings.o: include/google_download.h include/google_drive.h
 $(INTDIR)/google_download.o: include/google_upload.h
 $(INTDIR)/google_restore.o $(INTDIR)/google_restore_ps4.o $(INTDIR)/google_drive.o: include/google_restore.h
-$(INTDIR)/google_replace.o $(INTDIR)/google_replace_ps4.o $(INTDIR)/google_restore.o $(INTDIR)/google_drive.o $(INTDIR)/menu_options.o: include/google_replace.h
+$(INTDIR)/google_replace.o $(INTDIR)/google_replace_ps4.o $(INTDIR)/google_restore.o $(INTDIR)/google_drive.o $(INTDIR)/menu_options.o $(INTDIR)/google_save.o $(INTDIR)/exec_cmd.o: include/google_replace.h
 $(INTDIR)/google_replace_ps4.o: include/saves.h include/settings.h
 $(INTDIR)/google_restore_ps4.o $(INTDIR)/save_target.o: include/saves.h include/settings.h
 $(INTDIR)/exec_cmd.o: include/restore_fs.h
 $(INTDIR)/restore_fs.o $(INTDIR)/google_restore.o $(INTDIR)/google_replace.o $(INTDIR)/save_target.o: include/restore_fs.h
 $(INTDIR)/sd.o $(INTDIR)/saves.o: include/sd.h
+$(INTDIR)/saves.o: include/save_scan_path.h
 
 include/google_build_config.h:
 	@echo "Missing Google OAuth configuration. Run python3 tools/configure_google.py before building." >&2
