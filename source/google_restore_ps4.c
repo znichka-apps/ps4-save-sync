@@ -42,14 +42,27 @@ static int import_staged(void *p,const google_backup *b,const char *stage)
     /* IDs in the decrypted SFO are used only for title/directory matching.
        Apollo's HDD copy path resigns the destination to this local user. */
     int allowed=!cancel(p);
+    int32_t account_status=0;
     errno=0;
-    int ok=allowed && orbis_ImportStagedSave(stage,b->title,b->directory,c->user,cancel,p,&mount_blocked,
+    int account_ok=allowed && account_id_refresh_live(c->user,&apollo_config.account_id,&account_status);
+    int account_error=errno;
+    if (b->replace_trace && allowed) {
+        char detail[80];
+        snprintf(detail,sizeof(detail),"result=%d native=%d errno=%d call=sceUserServiceGetNpAccountId",
+            account_ok,account_status,account_ok?0:account_error);
+        google_replace_phase(b->user,"import account lookup",detail);
+    }
+    if (allowed && !account_ok)
+        snprintf(((google_backup*)b)->diagnostic,sizeof(b->diagnostic),
+            "Local PS4 account ID unavailable [sceUserServiceGetNpAccountId=%d]. ZIP retained.",account_status);
+    errno=0;
+    int ok=allowed && account_ok && orbis_ImportStagedSave(stage,b->title,b->directory,c->user,cancel,p,&mount_blocked,
         b->replace_trace?b->user:0);
     int import_error=errno;
     if (b->replace_trace) {
         char detail[64];
-        snprintf(detail,sizeof(detail),"result=%d errno=%d call=%s",ok,ok?0:import_error,
-            allowed?"ImportStagedSave":"cancel");
+        snprintf(detail,sizeof(detail),"result=%d native=%d errno=%d call=%s",ok,ok,ok?0:import_error,
+            !allowed?"cancel":!account_ok?"account_id":"ImportStagedSave");
         google_replace_phase(b->user,"import adapter",detail);
     }
     if (mount_blocked) {

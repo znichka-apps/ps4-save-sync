@@ -24,6 +24,9 @@ int unlink_secure(const char *path);
 int mkdirs(const char* dir);
 int copy_file(const char* input, const char* output);
 int copy_directory(const char* startdir, const char* inputdir, const char* outputdir);
+typedef struct { const char *call; int native_result; int error; } copy_diagnostic_t;
+int copy_directory_diagnostic(const char* startdir, const char* inputdir, const char* outputdir,
+    copy_diagnostic_t *diagnostic);
 int clean_directory(const char* inputdir, const char* filter);
 uint32_t file_crc32(const char* input);
 

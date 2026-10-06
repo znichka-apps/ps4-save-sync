@@ -24,16 +24,17 @@
 #include "save_zip.h"
 #include "restore_fs.h"
 #include "google_replace.h"
+#include "import_input.h"
 
 static char host_buf[256];
 
 /* Recovery tracing must not replace the errno from the operation being logged. */
-static void import_step(uint32_t user, const char *step, int ok, int error, const char *call)
+static void import_step(uint32_t user, const char *step, int ok, int native, int error, const char *call)
 {
 	if (!user) return;
 	int saved_errno = errno;
 	char detail[80];
-	snprintf(detail, sizeof(detail), "result=%d errno=%d call=%s", ok, ok ? 0 : error, call);
+	snprintf(detail, sizeof(detail), "result=%d native=%d errno=%d call=%s", ok, native, ok ? 0 : error, call);
 	google_replace_phase(user, step, detail);
 	errno = saved_errno;
 }
@@ -199,26 +200,33 @@ static int _update_save_details(const char* sys_path, const save_entry_t* save, 
 	LOG("Update Save Details :: Reading %s...", file_path);
 
 	sfo_context_t* sfo = sfo_alloc();
-	errno = 0;
-	if (sfo_read(sfo, file_path) < 0)
-	{
-		int error = errno;
-		import_step(trace_user,"import metadata",0,error,"sfo_read");
-		LOG("Unable to read from '%s'", file_path);
-		sfo_free(sfo);
-		errno = error;
+	if (!sfo) {
+		errno=ENOMEM;
+		import_step(trace_user,"import metadata",0,0,errno,"sfo_alloc");
 		return 0;
 	}
 	errno = 0;
-	if (!orbis_UpdateSaveParams(save,
-		(char*) sfo_get_param_value(sfo, "MAINTITLE"), (char*) sfo_get_param_value(sfo, "SUBTITLE"),
-		(char*) sfo_get_param_value(sfo, "DETAIL"), *(uint32_t*) sfo_get_param_value(sfo, "SAVEDATA_LIST_PARAM")))
+	int sfo_result = sfo_read(sfo, file_path);
+	int sfo_error = errno;
+	import_step(trace_user,"import metadata",sfo_result >= 0,sfo_result,sfo_error,"sfo_read");
+	if (sfo_result < 0)
 	{
-		int error = errno;
-		import_step(trace_user,"import metadata",0,error,"UpdateSaveParams");
 		LOG("Unable to read from '%s'", file_path);
 		sfo_free(sfo);
-		errno = error;
+		errno = sfo_error;
+		return 0;
+	}
+	errno = 0;
+	int update_result = orbis_UpdateSaveParams(save,
+		(char*) sfo_get_param_value(sfo, "MAINTITLE"), (char*) sfo_get_param_value(sfo, "SUBTITLE"),
+		(char*) sfo_get_param_value(sfo, "DETAIL"), *(uint32_t*) sfo_get_param_value(sfo, "SAVEDATA_LIST_PARAM"));
+	int update_error = errno;
+	import_step(trace_user,"import metadata",update_result,update_result,update_error,"UpdateSaveParams");
+	if (!update_result)
+	{
+		LOG("Unable to read from '%s'", file_path);
+		sfo_free(sfo);
+		errno = update_error;
 		return 0;
 	}
 
@@ -239,7 +247,6 @@ static int _update_save_details(const char* sys_path, const save_entry_t* save, 
 		free(iconBuf);
 	}
 
-	import_step(trace_user,"import metadata",1,0,"UpdateSaveParams");
 	return 1;
 }
 
@@ -331,11 +338,16 @@ static int _copy_save_hdd(const save_entry_t* save, uint32_t empty_user, int *mo
 	if (trace_user) google_replace_phase(trace_user,"target mount","before");
 	errno = 0;
 	int uncertain = 0;
-	int mounted = empty_user ? orbis_SaveMountEmptyChecked(save, empty_user, mount, &uncertain) :
+	save_mount_diagnostic_t mount_diagnostic={0};
+	int mounted = empty_user ? orbis_SaveMountEmptyCheckedDiagnostic(save, empty_user, mount, &uncertain,
+		&mount_diagnostic) :
 		orbis_SaveMountChecked(save, ORBIS_SAVE_DATA_MOUNT_MODE_RDWR | ORBIS_SAVE_DATA_MOUNT_MODE_CREATE2 | ORBIS_SAVE_DATA_MOUNT_MODE_COPY_ICON, mount, &uncertain);
 	int mount_error = errno;
 	if (trace_user) google_replace_phase(trace_user,"target mount",mounted?"after ok":"after failed");
-	import_step(trace_user,"import mount",mounted,mount_error,"SaveMountChecked");
+	import_step(trace_user,"import mount",mounted,mounted ? mounted :
+		(empty_user ? mount_diagnostic.native_result : mounted),mount_error,
+		mounted ? (empty_user?"SaveMountEmptyChecked":"SaveMountChecked") :
+		(empty_user && mount_diagnostic.call?mount_diagnostic.call:"SaveMountChecked"));
 	if (!mounted) {
 		if (uncertain && mount_blocked) *mount_blocked = 1;
 		errno = mount_error;
@@ -346,9 +358,13 @@ static int _copy_save_hdd(const save_entry_t* save, uint32_t empty_user, int *mo
 
 	LOG("Copying <%s> to %s...", save->path, copy_path);
 	errno = 0;
-	ret = copy_directory(save->path, save->path, copy_path);
+	copy_diagnostic_t copy_diagnostic={0};
+	ret = empty_user ? copy_directory_diagnostic(save->path, save->path, copy_path, &copy_diagnostic) :
+		copy_directory(save->path, save->path, copy_path);
 	int copy_error = errno;
-	import_step(trace_user,"import copy",ret == SUCCESS,copy_error,"copy_directory");
+	import_step(trace_user,"import copy",ret == SUCCESS,ret == SUCCESS ? ret :
+		(empty_user ? copy_diagnostic.native_result : ret),copy_error,
+		ret == SUCCESS ? "copy_directory" : (empty_user && copy_diagnostic.call ? copy_diagnostic.call : "copy_directory"));
 	if (!empty_user)
 	{
 		snprintf(copy_path, sizeof(copy_path), "%s" "sce_sys/", save->path);
@@ -371,17 +387,19 @@ static int _copy_save_hdd(const save_entry_t* save, uint32_t empty_user, int *mo
 	if (ok) {
 		snprintf(copy_path, sizeof(copy_path), APOLLO_SANDBOX_PATH "sce_sys/param.sfo", mount);
 		errno = 0;
-		ok = patch_sfo(copy_path, &patch) >= 0;
+		int patch_result = patch_sfo(copy_path, &patch);
+		ok = patch_result >= 0;
 		int ownership_error = errno;
-		import_step(trace_user,"import ownership",ok,ownership_error,"patch_sfo");
+		import_step(trace_user,"import ownership",ok,patch_result,ownership_error,"patch_sfo");
 		if (!ok) failure_error = ownership_error;
 	}
 	if (trace_user) google_replace_phase(trace_user,"unmount","before");
 	errno = 0;
-	int unmounted = orbis_SaveUmount(mount);
+	int unmount_native = 0;
+	int unmounted = orbis_SaveUmountStatus(mount, &unmount_native);
 	int unmount_error = errno;
 	if (trace_user) google_replace_phase(trace_user,"unmount",unmounted?"after ok":"after failed");
-	import_step(trace_user,"import unmount",unmounted,unmount_error,"SaveUmount");
+	import_step(trace_user,"import unmount",unmounted,unmount_native,unmount_error,"umountSave");
 	if (!unmounted) { ok = 0; failure_error = unmount_error; if (mount_blocked) *mount_blocked = 1; }
 
 	errno = ok ? 0 : failure_error;
@@ -392,65 +410,70 @@ int orbis_ImportStagedSave(const char *stage, const char *title, const char *dir
 	int (*cancelled)(void*), void *data, int *mount_blocked, uint32_t trace_user)
 {
 	if (mount_blocked) *mount_blocked = 0;
-	if (!stage || !title || !directory || !cancelled || user != apollo_config.user_id ||
-		!user || !apollo_config.account_id || cancelled(data)) {
-		import_step(trace_user,"import scan",0,0,"input");
+	import_input_result input_result;
+	if (!import_input_valid(stage,title,directory,user,apollo_config.user_id,
+		apollo_config.account_id,cancelled,data,&input_result)) {
+		import_step(trace_user,"import input",0,input_result.native_result,0,input_result.call);
 		return 0;
 	}
+	import_step(trace_user,"import input",1,1,0,"input");
 	if (strlen(title) != 9 || strncmp(title, "CUSA", 4) || !*directory ||
 		strlen(directory) >= ORBIS_SAVE_DATA_DIRNAME_DATA_MAXSIZE) {
-		import_step(trace_user,"import scan",0,0,"identity");
+		import_step(trace_user,"import scan",0,0,0,"identity");
 		return 0;
 	}
 	for (const unsigned char *p = (const unsigned char*)directory; *p; p++)
 		if (*p < 32 || *p == 127 || *p == '/' || *p == '\\' || *p == ':') {
-			import_step(trace_user,"import scan",0,0,"identity");
+			import_step(trace_user,"import scan",0,0,0,"identity");
 			return 0;
 		}
 	struct stat st;
 	int native_error;
 	errno = 0;
-	if (!restore_fs_init(&native_error)) {
+	int fs_ready = restore_fs_init(&native_error);
+	if (!fs_ready) {
 		int error = errno;
-		import_step(trace_user,"import scan",0,error,"fs_init");
+		import_step(trace_user,"import scan",0,native_error,error,"restore_fs_init");
 		return 0;
 	}
 	errno = 0;
-	if (restore_fs_lstat(stage, &st)) {
+	int stat_result = restore_fs_lstat(stage, &st);
+	if (stat_result) {
 		int error = errno;
-		import_step(trace_user,"import scan",0,error,"stage_lstat");
+		import_step(trace_user,"import scan",0,stat_result,error,"stage_lstat");
 		return 0;
 	}
 	if (!S_ISDIR(st.st_mode) || (st.st_mode & 077)) {
-		import_step(trace_user,"import scan",0,0,"stage_type");
+		import_step(trace_user,"import scan",0,(int)st.st_mode,0,"stage_type");
 		return 0;
 	}
 	char source_root[512], expected[768];
 	int n = snprintf(source_root, sizeof(source_root), "%s/", stage);
 	if (n < 0 || (size_t)n >= sizeof(source_root)) {
-		import_step(trace_user,"import scan",0,0,"root_length");
+		import_step(trace_user,"import scan",0,n,0,"root_length");
 		return 0;
 	}
 	n = snprintf(expected, sizeof(expected), "%sPS4/APOLLO/%s/sce_sys/param.sfo", source_root, directory);
 	if (n < 0 || (size_t)n >= sizeof(expected)) {
-		import_step(trace_user,"import scan",0,0,"sfo_path_length");
+		import_step(trace_user,"import scan",0,n,0,"sfo_path_length");
 		return 0;
 	}
 	errno = 0;
-	if (restore_fs_lstat(expected, &st)) {
+	stat_result = restore_fs_lstat(expected, &st);
+	if (stat_result) {
 		int error = errno;
-		import_step(trace_user,"import scan",0,error,"param_sfo_lstat");
+		import_step(trace_user,"import scan",0,stat_result,error,"param_sfo_lstat");
 		return 0;
 	}
 	if (!S_ISREG(st.st_mode)) {
-		import_step(trace_user,"import scan",0,0,"param_sfo_type");
+		import_step(trace_user,"import scan",0,(int)st.st_mode,0,"param_sfo_type");
 		return 0;
 	}
 	errno = 0;
 	list_t *list = ReadUsbList(source_root);
 	int scan_error = errno;
 	if (!list) {
-		import_step(trace_user,"import scan",0,scan_error,"ReadUsbList");
+		import_step(trace_user,"import scan",0,0,scan_error,"ReadUsbList");
 		return 0;
 	}
 	save_entry_t *match = NULL;
@@ -466,7 +489,7 @@ int orbis_ImportStagedSave(const char *stage, const char *title, const char *dir
 	int ok = match && n >= 0 && (size_t)n < sizeof(expected) && match->path && !strcmp(match->path, expected) &&
 		match->title_id && !strcmp(match->title_id, title) && match->dir_name && !strcmp(match->dir_name, directory) &&
 		user == apollo_config.user_id && !cancelled(data);
-	import_step(trace_user,"import scan",ok,0,"match");
+	import_step(trace_user,"import scan",ok,ok,0,"match");
 	if (!ok) errno = 0;
 	/* This is the final check before the existing HDD copy/resign pipeline.
 	   save_mount(empty=1) repeats it while creating the target. */
@@ -474,8 +497,12 @@ int orbis_ImportStagedSave(const char *stage, const char *title, const char *dir
 		errno = 0;
 		int absent = orbis_SaveTargetAbsent(match, user);
 		int absence_error = errno;
-		ok = absent == 1 && user == apollo_config.user_id && !cancelled(data);
-		import_step(trace_user,"import target absence",ok,absence_error,"SaveTargetAbsent");
+		ok = absent == 1;
+		import_step(trace_user,"import target absence",ok,absent,absence_error,"SaveTargetAbsent");
+		if (ok && (user != apollo_config.user_id || cancelled(data))) {
+			import_step(trace_user,"import input",0,0,0,"cancelled_before_copy");
+			ok=0;
+		}
 	}
 	if (ok) {
 		errno = 0;
@@ -484,7 +511,11 @@ int orbis_ImportStagedSave(const char *stage, const char *title, const char *dir
 	int import_error = ok ? 0 : errno;
 	UnloadGameList(list);
 	errno = import_error;
-	return ok && user == apollo_config.user_id && !cancelled(data);
+	if (ok && (user != apollo_config.user_id || cancelled(data))) {
+		import_step(trace_user,"import finish",0,0,0,"cancelled_after_copy");
+		return 0;
+	}
+	return ok;
 }
 
 static int _copy_save_pfs(const save_entry_t* save)

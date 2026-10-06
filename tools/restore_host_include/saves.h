@@ -21,7 +21,10 @@ int orbis_SaveDelete(const save_entry_t*);
 int orbis_SaveDeleteStatus(const save_entry_t*, int*);
 int orbis_SaveMountEmpty(const save_entry_t*,uint32_t,char*);
 int orbis_SaveMountEmptyChecked(const save_entry_t*,uint32_t,char*,int*);
+typedef struct { const char *call; int native_result; int error; } save_mount_diagnostic_t;
+int orbis_SaveMountEmptyCheckedDiagnostic(const save_entry_t*,uint32_t,char*,int*,save_mount_diagnostic_t*);
 int orbis_ImportStagedSave(const char*,const char*,const char*,uint32_t,int (*)(void*),void*,int*,uint32_t);
 int orbis_SaveUmount(const char*);
+int orbis_SaveUmountStatus(const char*,int*);
 int orbis_UpdateSaveParams(const save_entry_t*,const char*,const char*,const char*,uint32_t);
 #endif

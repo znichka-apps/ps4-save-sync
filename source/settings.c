@@ -13,6 +13,7 @@
 #include "saves.h"
 #include "common.h"
 #include "google_drive.h"
+#include "account_identity.h"
 
 #define _i18n(str) (str)
 #define ORBIS_USER_SERVICE_USER_ID_INVALID	-1
@@ -288,6 +289,11 @@ int save_app_settings(app_config_t* config)
 	return 1;
 }
 
+int account_id_refresh_live(uint32_t user, uint64_t *account_id, int32_t *native_status)
+{
+	return account_identity_refresh(user, account_id, sceUserServiceGetNpAccountId, native_status);
+}
+
 int load_app_settings(app_config_t* config)
 {
 	char filePath[256];
@@ -297,7 +303,9 @@ int load_app_settings(app_config_t* config)
 	OrbisSaveDataDirName dirName;
 	OrbisSaveDataMountResult mountResult;
 
-	sceUserServiceGetNpAccountId(config->user_id, &config->account_id);
+	int32_t account_status=0;
+	if (!account_id_refresh_live(config->user_id, &config->account_id, &account_status))
+		LOG("sceUserServiceGetNpAccountId unavailable: status=0x%08X account_id_assigned=0", (uint32_t)account_status);
 	sceKernelGetOpenPsIdForSystem(config->psid);
 
 	if (sceSaveDataInitialize3(0) != SUCCESS)

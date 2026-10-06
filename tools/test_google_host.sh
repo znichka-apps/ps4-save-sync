@@ -77,6 +77,9 @@ cc -std=gnu11 -Wall -Wextra -Werror -fsanitize=address,undefined -g \
   -Itools/restore_host_include -Iinclude tools/test_google_restore_ps4.c -lmbedcrypto \
   -o build/host/test_google_restore_ps4
 build/host/test_google_restore_ps4
+cc -std=gnu11 -Wall -Wextra -Werror -fsanitize=address,undefined -g \
+  -Iinclude tools/test_import_input.c source/import_input.c -o build/host/test_import_input
+build/host/test_import_input
 cc -std=gnu11 -Wall -Wextra -Werror -fsanitize=address,undefined -g -D__PS4__ \
   -Itools/restore_host_include -Itools/host_include -Iinclude \
   tools/test_google_replace_ps4.c -o build/host/test_google_replace_ps4

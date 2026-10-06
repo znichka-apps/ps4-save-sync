@@ -324,11 +324,19 @@ int regMgr_SetAccountId(int userNumber, uint64_t* psnAccountId);
 
 int get_save_details(const save_entry_t *save, char** details);
 int orbis_SaveUmount(const char* mountPath);
+int orbis_SaveUmountStatus(const char* mountPath, int *nativeStatus);
 int orbis_SaveMount(const save_entry_t *save, uint32_t mode, char* mountPath);
 int orbis_SaveTargetAbsent(const save_entry_t *save, uint32_t user);
 int orbis_SaveMountEmpty(const save_entry_t *save, uint32_t user, char* mountPath);
 int orbis_SaveMountChecked(const save_entry_t *save, uint32_t mode, char* mountPath, int *mountUncertain);
 int orbis_SaveMountEmptyChecked(const save_entry_t *save, uint32_t user, char* mountPath, int *mountUncertain);
+typedef struct {
+	const char *call;
+	int native_result;
+	int error;
+} save_mount_diagnostic_t;
+int orbis_SaveMountEmptyCheckedDiagnostic(const save_entry_t *save, uint32_t user, char* mountPath,
+	int *mountUncertain, save_mount_diagnostic_t *diagnostic);
 int orbis_ImportStagedSave(const char *stage, const char *title, const char *directory, uint32_t user,
 	int (*cancelled)(void*), void *data, int *mountBlocked, uint32_t replaceTraceUser);
 int orbis_SaveDelete(const save_entry_t *save);

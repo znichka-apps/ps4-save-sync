@@ -368,6 +368,13 @@ IDs are never trusted. Cancellation or any failure retains the original ZIP;
 partial HDD targets are retained for manual inspection and never reported as a
 successful restore.
 
+The local PS4 user must have a nonzero NP account ID so the imported SFO and
+save database can be assigned to that user. A current PlayStation Network
+session is not required: Apollo also supports offline account activation.
+The import refreshes the account ID through `sceUserServiceGetNpAccountId` and
+stops before mounting or copying if that SDK call fails or returns zero.
+The phase log records its raw native status without exposing the account ID.
+
 Rendering and controller input remain on the main thread. The existing exclusive
 worker serializes save, credential and network phases. Google credentials are
 read/refreshed before the target save mount; no credential mount or HTTP transfer
@@ -440,13 +447,17 @@ has its own phase record. `rollback: after failed` is a summary marker and
 cannot by itself identify which operation failed. The optional debug log is
 `/data/ps4-save-sync/apollo.log`.
 
-During replacement or recovery import, the same phase log records `import scan`,
+During replacement or recovery import, the same phase log records `import account lookup`,
+`import input`, `import scan`,
 `import target absence`, `import mount`, `import copy`, `import metadata`,
 `import ownership`, `import unmount`, and `import adapter` results as the steps
-run. Each result includes the call name and an errno captured immediately after
-the call; `errno=0` means the failed operation did not provide a POSIX errno.
-For a composed Apollo helper, the named call identifies the failed import step;
-its errno alone may not identify an inner SDK operation.
+run. Each result includes the call name, its raw `native` return, and an errno
+captured immediately after the call; `errno=0` means the failed operation did
+not provide a POSIX errno. An `import input` failure names the rejected guard,
+including a missing local `account_id`. Mount failures name the inner filesystem,
+save creation, database, or private mount call. Copy failures name the directory
+or file operation, and unmount records the private SDK status. The account and
+empty-slot guards remain required.
 The scan result distinguishes a missing staged `param.sfo` from a scanner match
 failure. Later steps are absent when an earlier step stops the import, except
 that unmount is still attempted after a successful mount.

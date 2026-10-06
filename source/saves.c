@@ -65,7 +65,7 @@ int orbis_SaveDelete(const save_entry_t *save)
 	return orbis_SaveDeleteStatus(save, NULL);
 }
 
-int orbis_SaveUmount(const char* mountPath)
+int orbis_SaveUmountStatus(const char* mountPath, int *nativeStatus)
 {
 	char mountDir[256];
 
@@ -73,6 +73,7 @@ int orbis_SaveUmount(const char* mountPath)
 	int umountErrorCode = 0;
 	int unmounted = save_unmount_directory(mountDir, &umountErrorCode);
 	int saved_errno = errno;
+	if (nativeStatus) *nativeStatus = umountErrorCode;
 
 	if (!unmounted)
 	{
@@ -81,6 +82,11 @@ int orbis_SaveUmount(const char* mountPath)
 	}
 	errno = saved_errno;
 	return unmounted;
+}
+
+int orbis_SaveUmount(const char* mountPath)
+{
+	return orbis_SaveUmountStatus(mountPath, NULL);
 }
 
 int orbis_UpdateSaveParams(const save_entry_t* save, const char* title, const char* subtitle, const char* details, uint32_t userParam)

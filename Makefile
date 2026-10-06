@@ -75,7 +75,8 @@ $(INTDIR)/google_restore.o $(INTDIR)/google_restore_ps4.o $(INTDIR)/google_drive
 $(INTDIR)/google_replace.o $(INTDIR)/google_replace_ps4.o $(INTDIR)/google_restore.o $(INTDIR)/google_drive.o $(INTDIR)/menu_options.o $(INTDIR)/google_save.o $(INTDIR)/exec_cmd.o: include/google_replace.h
 $(INTDIR)/google_replace_ps4.o: include/saves.h include/settings.h
 $(INTDIR)/google_restore_ps4.o $(INTDIR)/save_target.o: include/saves.h include/settings.h
-$(INTDIR)/exec_cmd.o: include/restore_fs.h
+$(INTDIR)/settings.o: include/account_identity.h
+$(INTDIR)/exec_cmd.o: include/restore_fs.h include/import_input.h
 $(INTDIR)/restore_fs.o $(INTDIR)/google_restore.o $(INTDIR)/google_replace.o $(INTDIR)/save_target.o: include/restore_fs.h
 $(INTDIR)/sd.o $(INTDIR)/saves.o: include/sd.h
 $(INTDIR)/saves.o: include/save_scan_path.h

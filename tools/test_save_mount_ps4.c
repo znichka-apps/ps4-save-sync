@@ -79,10 +79,12 @@ int main(void)
     assert(rmdir(mount_dir)==0);
     sdk_operation_failure=0; absent_result=1; mount_failure=1;
     int uncertain=0;
+    save_mount_diagnostic_t diagnostic={0};
     struct stat st;
     errno=0;
-    assert(!orbis_SaveMountEmptyChecked(&save,42,mounted,&uncertain));
+    assert(!orbis_SaveMountEmptyCheckedDiagnostic(&save,42,mounted,&uncertain,&diagnostic));
     assert(uncertain && errno==ENOENT && mount_calls==2);
+    assert(!strcmp(diagnostic.call,"mountSave") && diagnostic.native_result==-1234 && diagnostic.error==ENOENT);
     assert(!stat(mount_dir,&st) && S_ISDIR(st.st_mode));
     assert(!rmdir(mount_dir));
 

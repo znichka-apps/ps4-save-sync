@@ -3,6 +3,7 @@
 #include <stdio.h>
 #include <stdint.h>
 #include <stdlib.h>
+#include <string.h>
 #include <sys/stat.h>
 #include <unistd.h>
 #include <errno.h>
@@ -46,9 +47,11 @@ int main(void)
 
     const char *blocker="build/host/copy-cleanup/blocker";
     f=fopen(blocker,"wb"); assert(f); assert(!fclose(f));
-    assert(copy_directory("build/host/copy-cleanup/source/",
-        "build/host/copy-cleanup/source/","build/host/copy-cleanup/blocker/")==FAILED);
+    copy_diagnostic_t diagnostic={0};
+    assert(copy_directory_diagnostic("build/host/copy-cleanup/source/",
+        "build/host/copy-cleanup/source/","build/host/copy-cleanup/blocker/",&diagnostic)==FAILED);
     assert(errno==ENOTDIR); /* Failure survives copy_file and recursive DIR cleanup. */
+    assert(!strcmp(diagnostic.call,"copy_file") && diagnostic.native_result==FAILED && diagnostic.error==ENOTDIR);
     assert(open_fds()==before); /* Recursive copy failure closes both DIR streams. */
     assert(!unlink("build/host/copy-cleanup/target"));
     assert(!unlink(blocker)); assert(!unlink(input));
