@@ -8,6 +8,7 @@
 #include <sys/stat.h>
 #include <zip.h>
 #include "google_download.h"
+#include "google_restore_log.h"
 #define FILES "https://www.googleapis.com/drive/v3/files"
 static const char *str(cJSON *j, const char *k) {
     cJSON *p = cJSON_GetObjectItemCaseSensitive(j,k);
@@ -254,7 +255,10 @@ static int cache_directory(void) {
 }
 int google_download_recheck(const google_remote_backup *remote, const google_upload_io *io) {
     const google_backup *b=&remote->backup;
-    if (!id(remote->id) || io->cancelled(io->data)) return 0;
+    google_restore_clear_failure();
+    if (!id(remote->id) || io->cancelled(io->data)) {
+        google_restore_log("metadata recheck",101,0,0,0,"id/cancel",1); return 0;
+    }
     char url[256];
     snprintf(url,sizeof(url),FILES "/%s?fields=id,mimeType,size,md5Checksum,description,appProperties",remote->id);
     google_upload_request q={.method="GET",.url=url}; google_upload_response r={0}; google_remote_backup fresh;
@@ -262,32 +266,70 @@ int google_download_recheck(const google_remote_backup *remote, const google_upl
         !strcmp(fresh.id,remote->id) && !strcmp(fresh.backup.game,b->game) &&
         !strcmp(fresh.backup.title,b->title) && !strcmp(fresh.backup.directory,b->directory) &&
         !strcmp(fresh.backup.utc,b->utc) && !strcmp(fresh.backup.md5,b->md5) && fresh.backup.size==b->size;
-    cJSON_Delete(r.json); return ok;
+    int error=errno;
+    char call_detail[80];
+    snprintf(call_detail,sizeof(call_detail),"files.get http=%ld curl=%d",r.status,(int)r.transport);
+    google_restore_log("metadata recheck",101,ok?0:error,0,0,call_detail,!ok);
+    cJSON_Delete(r.json); errno=error; return ok;
 }
 int google_download_run(google_remote_backup *remote, const google_upload_io *io) {
     google_backup *b=&remote->backup; google_upload_response r={0}; int result=GOOGLE_UPLOAD_FAILED;
-    char url[256]; FILE *fp=NULL;
-    if (!id(remote->id) || io->cancelled(io->data)) goto done;
+    char url[256]; FILE *fp=NULL; int op=100, failure_errno=0, zip_error=0;
+    const char *stage="download input", *call_name="id/cancel";
+    b->diagnostic[0]=0;
+    google_restore_clear_failure();
+    google_restore_log("download",100,0,0,0,"start",0);
+    if (!id(remote->id) || io->cancelled(io->data)) { failure_errno=errno; goto done; }
+    google_restore_log("download input",op,0,0,0,call_name,0);
     /* Re-read metadata at selection time, rejecting changed files. */
-    if (!google_download_recheck(remote,io)) goto done;
-    if (!cache_directory()) goto done;
+    op=101; stage="metadata recheck"; call_name="files.get";
+    if (!google_download_recheck(remote,io)) { failure_errno=errno; goto done; }
+    op=102; stage="cache directory"; call_name="mkdir";
+    if (!cache_directory()) { failure_errno=errno; goto done; }
+    google_restore_log(stage,op,0,0,0,call_name,0);
     snprintf(b->temp_dir,sizeof(b->temp_dir),GOOGLE_BACKUP_CACHE "drive-XXXXXX");
-    if (!mkdtemp(b->temp_dir)) { b->temp_dir[0]=0; goto done; }
+    op=103; stage="private directory"; call_name="mkdtemp";
+    if (!mkdtemp(b->temp_dir)) { failure_errno=errno; b->temp_dir[0]=0; goto done; }
+    google_restore_log(stage,op,0,0,0,call_name,0);
     snprintf(b->archive,sizeof(b->archive),"%s/backup.zip",b->temp_dir);
-    fp=fopen(b->archive,"wb+"); if (!fp) goto done;
+    op=104; stage="archive creation"; call_name="fopen";
+    fp=fopen(b->archive,"wb+"); if (!fp) { failure_errno=errno; goto done; }
+    google_restore_log(stage,op,0,0,0,call_name,0);
     snprintf(url,sizeof(url),FILES "/%s?alt=media",remote->id);
     google_upload_request q={.method="GET",.url=url,.download=fp,.total=b->size};
-    if (!call(io,&q,&r) || r.downloaded!=b->size || fflush(fp) || ferror(fp)) goto done;
-    if (fclose(fp)) { fp=NULL; goto done; } fp=NULL;
+    op=105; stage="Drive media transfer"; call_name="files.get media/fflush";
+    if (!call(io,&q,&r) || r.downloaded!=b->size || fflush(fp) || ferror(fp)) { failure_errno=errno; goto done; }
+    google_restore_log(stage,op,0,0,0,call_name,0);
+    op=106; stage="archive close"; call_name="fclose";
+    if (fclose(fp)) { failure_errno=errno; fp=NULL; goto done; } fp=NULL;
+    google_restore_log(stage,op,0,0,0,call_name,0);
     google_backup hash=*b;
-    if (!google_backup_hash(&hash,io->cancelled,io->data) || hash.size!=b->size || strcmp(hash.md5,b->md5) ||
-        !google_download_zip(b,io->cancelled,io->data)) goto done;
+    op=107; stage="download checksum"; call_name="google_backup_hash";
+    if (!google_backup_hash(&hash,io->cancelled,io->data) || hash.size!=b->size || strcmp(hash.md5,b->md5)) {
+        failure_errno=errno; if (hash.diagnostic[0]) snprintf(b->diagnostic,sizeof(b->diagnostic),"%s",hash.diagnostic); goto done;
+    }
+    google_restore_log(stage,op,0,0,0,call_name,0);
+    op=108; stage="download ZIP validation"; call_name="google_download_zip_fd";
+    FILE *archive=fopen(b->archive,"rb");
+    if (!archive) { failure_errno=errno; goto done; }
+    int zip_ok=google_download_zip_fd(b,fileno(archive),io->cancelled,io->data,&zip_error);
+    failure_errno=errno;
+    if (fclose(archive)) { zip_ok=0; failure_errno=errno; }
+    if (!zip_ok) goto done;
+    google_restore_log(stage,op,0,zip_error,0,call_name,0);
     result=GOOGLE_UPLOAD_SUCCESS;
 done:
+    if (result!=GOOGLE_UPLOAD_SUCCESS) {
+        char detail[80];
+        snprintf(detail,sizeof(detail),"%s http=%ld curl=%d",call_name,r.status,(int)r.transport);
+        google_restore_log(stage,op,failure_errno,zip_error,0,detail,1);
+        if (!b->diagnostic[0]) google_restore_last_failure(b->diagnostic,sizeof(b->diagnostic));
+    }
     cJSON_Delete(r.json); if (fp) fclose(fp);
     if (result!=GOOGLE_UPLOAD_SUCCESS) {
         if (io->cancelled(io->data)) result=GOOGLE_UPLOAD_CANCELLED;
-        if (!google_backup_cleanup(b)) snprintf(b->diagnostic,sizeof(b->diagnostic),"Temporary download cleanup failed.");
+        if (!google_backup_cleanup(b)) { int error=errno; google_restore_log("download cleanup",109,error,zip_error,0,"google_backup_cleanup",1); snprintf(b->diagnostic,sizeof(b->diagnostic),"Temporary download cleanup failed [op=109 errno=%d zip=%d native=0].",error,zip_error); }
     }
+    errno=failure_errno;
     return result;
 }

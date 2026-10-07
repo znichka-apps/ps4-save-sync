@@ -25,14 +25,17 @@
 #include "restore_fs.h"
 #include "google_replace.h"
 #include "import_input.h"
+#include "google_restore_log.h"
 
 static char host_buf[256];
+static int restore_import_active;
 
 /* Recovery tracing must not replace the errno from the operation being logged. */
 static void import_step(uint32_t user, const char *step, int ok, int native, int error, const char *call)
 {
-	if (!user) return;
 	int saved_errno = errno;
+	if (restore_import_active) google_restore_log(step,10,ok?0:error,0,native,call,!ok);
+	if (!user) { errno=saved_errno; return; }
 	char detail[80];
 	snprintf(detail, sizeof(detail), "result=%d native=%d errno=%d call=%s", ok, native, ok ? 0 : error, call);
 	google_replace_phase(user, step, detail);
@@ -406,7 +409,7 @@ static int _copy_save_hdd(const save_entry_t* save, uint32_t empty_user, int *mo
 	return ok;
 }
 
-int orbis_ImportStagedSave(const char *stage, const char *title, const char *directory, uint32_t user,
+static int import_staged_save_inner(const char *stage, const char *title, const char *directory, uint32_t user,
 	int (*cancelled)(void*), void *data, int *mount_blocked, uint32_t trace_user)
 {
 	if (mount_blocked) *mount_blocked = 0;
@@ -516,6 +519,17 @@ int orbis_ImportStagedSave(const char *stage, const char *title, const char *dir
 		return 0;
 	}
 	return ok;
+}
+
+int orbis_ImportStagedSave(const char *stage, const char *title, const char *directory, uint32_t user,
+	int (*cancelled)(void*), void *data, int *mount_blocked, uint32_t trace_user)
+{
+	restore_import_active=1;
+	int result=import_staged_save_inner(stage,title,directory,user,cancelled,data,mount_blocked,trace_user);
+	int saved_errno=errno;
+	restore_import_active=0;
+	errno=saved_errno;
+	return result;
 }
 
 static int _copy_save_pfs(const save_entry_t* save)

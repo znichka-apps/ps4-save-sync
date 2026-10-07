@@ -4,12 +4,14 @@
 #include <stdbool.h>
 #include <fcntl.h>
 #include <unistd.h>
+#include <errno.h>
 #include <orbis/libkernel.h>
 #include <libjbc.h>
 #include <dbglogger.h>
 #define LOG dbglogger_log
 
 #include "sd.h"
+#include "google_restore_log.h"
 
 int (*sceFsUfsAllocateSaveData)(int fd, uint64_t imageSize, uint64_t imageFlags, int ext);
 int (*sceFsInitCreatePfsSaveDataOpt)(CreatePfsSaveDataOpt *opt);
@@ -166,17 +168,29 @@ static int create_save(const char *volumePath, const char *volumeKeyPath, int bl
 
     volumeSize = (uint64_t)blocks << 15;
 
-    if (sceFsUfsAllocateSaveData(fd, volumeSize, 0 << 7, 0) < 0) {
+    int sdk_result=sceFsUfsAllocateSaveData(fd, volumeSize, 0 << 7, 0);
+    int sdk_error=errno;
+    if (empty) google_restore_log("save image allocation",10,sdk_result<0?sdk_error:0,0,
+        sdk_result,"sceFsUfsAllocateSaveData",sdk_result<0);
+    if (sdk_result < 0) {
         sceKernelClose(fd);
         return -6;
     }
     if (sceKernelClose(fd) != 0) return -6;
 
-    if (sceFsInitCreatePfsSaveDataOpt(&opt) < 0) {
+    sdk_result=sceFsInitCreatePfsSaveDataOpt(&opt);
+    sdk_error=errno;
+    if (empty) google_restore_log("save image setup",10,sdk_result<0?sdk_error:0,0,
+        sdk_result,"sceFsInitCreatePfsSaveDataOpt",sdk_result<0);
+    if (sdk_result < 0) {
         return -7;
     }
 
-    if (sceFsCreatePfsSaveDataImage(&opt, volumePath, 0, volumeSize, decryptedSealedKey) < 0) {
+    sdk_result=sceFsCreatePfsSaveDataImage(&opt, volumePath, 0, volumeSize, decryptedSealedKey);
+    sdk_error=errno;
+    if (empty) google_restore_log("save image creation",10,sdk_result<0?sdk_error:0,0,
+        sdk_result,"sceFsCreatePfsSaveDataImage",sdk_result<0);
+    if (sdk_result < 0) {
         return -8;
     }
 

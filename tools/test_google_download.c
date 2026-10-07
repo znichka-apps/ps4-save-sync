@@ -114,7 +114,9 @@ int main(void) {
         google_remote_backup job=remote; stop=0; requests=chunks=0;
         int result=google_download_run(&job,&io);
         if (!mode) { assert(result==GOOGLE_UPLOAD_SUCCESS); assert(chunks>1); assert(!access(job.backup.archive,F_OK)); assert(google_backup_cleanup(&job.backup)); }
-        else { assert(result==(mode==2?GOOGLE_UPLOAD_CANCELLED:GOOGLE_UPLOAD_FAILED)); assert(!job.backup.temp_dir[0]); }
+        else { assert(result==(mode==2?GOOGLE_UPLOAD_CANCELLED:GOOGLE_UPLOAD_FAILED)); assert(!job.backup.temp_dir[0]);
+            assert(strstr(job.backup.diagnostic,"op=")&&strstr(job.backup.diagnostic,"zip=")&&
+                strstr(job.backup.diagnostic,"native=")); }
     }
     mode=0; stop=0; requests=chunks=0;
     assert(google_download_recheck(&remote,&io) && requests==1 && !chunks);

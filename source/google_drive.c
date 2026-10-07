@@ -16,6 +16,7 @@
 #include "google_store.h"
 #include "google_ca.h"
 #include "google_restore.h"
+#include "google_restore_log.h"
 #include "google_replace.h"
 
 #define SCOPE "https://www.googleapis.com/auth/drive.file"
@@ -642,7 +643,9 @@ static int worker(void *unused)
         google_upload_io io = {&auth,upload_request,upload_refresh,upload_cancelled,upload_progress,upload_wait};
         message("Rechecking selected backup metadata and archive...");
         if (!google_download_recheck(&selected_backup,&io)) {
-            message("Backup metadata changed or could not be rechecked. Restore refused; no target written."); goto done;
+            google_restore_last_failure(selected_backup.backup.diagnostic,sizeof(selected_backup.backup.diagnostic));
+            message(selected_backup.backup.diagnostic[0]?selected_backup.backup.diagnostic:
+                "Backup metadata changed or could not be rechecked. Restore refused; no target written."); goto done;
         }
         int result=current_action==GOOGLE_RESTORE?
             google_restore_local(&selected_backup.backup,upload_cancelled,restore_finish,NULL):
@@ -664,7 +667,8 @@ static int worker(void *unused)
                     result==GOOGLE_REPLACE_CANCELLED?
                     "Replace cancelled before target change. Journal and ZIPs retained where created.":
                     "Replace refused before target change. Check details; ZIPs retained.");
-            else message(result==GOOGLE_UPLOAD_CANCELLED?"Restore cancelled; NOT successful.":"Restore failed; NOT successful. Downloaded ZIP retained.");
+            else message(selected_backup.backup.diagnostic[0]?selected_backup.backup.diagnostic:
+                result==GOOGLE_UPLOAD_CANCELLED?"Restore cancelled; ZIP retained.":"Restore failed; downloaded ZIP retained.");
             SDL_LockMutex(lock);
             snprintf(state.preparation_details,sizeof(state.preparation_details),"%s",selected_backup.backup.diagnostic);
             SDL_UnlockMutex(lock);

@@ -11,6 +11,12 @@
 #include "google_restore.h"
 
 static google_backup backup;
+static void assert_log_contains(const char *needle) {
+    FILE *f=fopen("build/host/google_restore.log","rb");assert(f);
+    char line[512];int found=0;
+    while(fgets(line,sizeof(line),f))if(strstr(line,needle))found=1;
+    assert(!fclose(f)&&found);
+}
 static int cancel_after, cancel_calls, absent_calls, target_reject_at, target_status, imports, cleanup_failure, expect_root_file, import_failure;
 enum { SFO_OK, SFO_SHORT, SFO_MAGIC, SFO_VERSION, SFO_COUNT, SFO_TABLE, SFO_KEY_OFFSET, SFO_INDEX_OFFSET,
     SFO_AGGREGATE, SFO_LONG_KEY, SFO_DUPLICATE,
@@ -160,9 +166,11 @@ int main(void) {
     int first=google_restore_run(&backup,&io);
     if(first!=GOOGLE_UPLOAD_SUCCESS)fprintf(stderr,"restore stage failed: %s\n",backup.diagnostic);
     assert(first==GOOGLE_UPLOAD_SUCCESS);
+    assert_log_contains("stage=PS4 import op=10 errno=0 zip=0 native=0 call=import_staged result=ok");
     reset();fixture(NULL,0100000,1);import_failure=1;
     assert(google_restore_run(&backup,&io)==GOOGLE_UPLOAD_FAILED&&imports==1);
-    assert(strstr(backup.diagnostic,"Google restore failed [op=10 errno=2 zip=0]"));
+    assert(strstr(backup.diagnostic,"op=10 errno=2 zip=0 native=0"));
+    assert_log_contains("stage=PS4 import op=10 errno=2 zip=0 native=0 call=return result=failed");
     assert(access(backup.archive,F_OK)==0);
     assert(imports==1&&absent_calls==2&&access(backup.archive,F_OK)==0);
     assert(access("build/host/cache/no-such-stage",F_OK));
@@ -229,8 +237,9 @@ int main(void) {
     }
     reset();fixture(NULL,0100000,0);
     assert(google_restore_run(&backup,&io)==GOOGLE_UPLOAD_FAILED);
-    assert(strstr(backup.diagnostic,"Google restore failed [op=4")&&
-        strstr(backup.diagnostic,"Download retained"));
+    assert(strstr(backup.diagnostic,"op=4")&&
+        strstr(backup.diagnostic,"ZIP retained"));
+    assert_log_contains("stage=hash and ZIP validation op=4 errno=0 zip=21 native=0 call=return result=failed");
     assert(access(backup.archive,F_OK)==0&&!imports&&!absent_calls);
 
     const char *bad[]={"OTHER/root.bin","SAVE/../escape","/absolute","SAVE/link\\escape"};
@@ -250,6 +259,8 @@ int main(void) {
         char expected[96];snprintf(expected,sizeof(expected),"op=%d errno=%d zip=0",check==1?8:9,EEXIST);
         assert(strstr(backup.diagnostic,expected)&&strstr(backup.diagnostic,"Save already exists")&&
             strstr(backup.diagnostic,"Download retained")&&access(backup.archive,F_OK)==0);
+        assert_log_contains(check==1?"stage=target absence op=8 errno=17 zip=0 native=0":
+            "stage=target absence op=9 errno=17 zip=0 native=0");
         char stage[320];snprintf(stage,sizeof(stage),"%s/stage",backup.temp_dir);
         assert(access(stage,F_OK)!=0);
     }
@@ -265,6 +276,7 @@ int main(void) {
     assert(cancelled_result==GOOGLE_UPLOAD_CANCELLED&&!imports&&access(backup.archive,F_OK)==0);
     reset();fixture(NULL,0100000,1);cleanup_failure=1;
     assert(google_restore_run(&backup,&io)==GOOGLE_UPLOAD_FAILED&&imports==1&&access(backup.archive,F_OK)==0);
+    assert_log_contains("stage=staging cleanup op=11 errno=5 zip=0 native=0 call=remove_stage result=failed");
     cleanup_failure=0;assert(!access(backup.temp_dir,F_OK));
     clear_tree(backup.temp_dir);
     assert(!rmdir("/tmp/ps4-save-sync-restore-cache"));

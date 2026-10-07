@@ -42,7 +42,7 @@ int sceKernelOpen(const char *path,int flags,int permissions) {
 int64_t sceKernelWrite(int fd,const void *p,size_t n) { kernel_writes++; return mode==3?0:write(fd,p,n); }
 int sceKernelFsync(int fd) { sync_calls++; return mode==4 || (mode==6 && sync_calls==2)?-1:fsync(fd); }
 int sceKernelClose(int fd) { close_calls++; int result=close(fd); return mode==5 || (mode==7 && close_calls==3)?-1:result; }
-static int allocate(int fd,uint64_t size,uint64_t flags,int ext) { (void)flags;(void)ext; assert(size==((uint64_t)131072<<15)); return ftruncate(fd,128); }
+static int allocate(int fd,uint64_t size,uint64_t flags,int ext) { (void)flags;(void)ext; assert(size==((uint64_t)131072<<15)); return mode==9?-777:ftruncate(fd,128); }
 static int init(CreatePfsSaveDataOpt *opt) { (void)opt; return 0; }
 static int image(CreatePfsSaveDataOpt *opt,const char *path,int id,uint64_t size,uint8_t *secret) {
     (void)opt;(void)id;(void)size;(void)secret;
@@ -55,13 +55,23 @@ static void unchanged(const char *path) {
 int main(void) {
     mkdir("build/host/create",0700);
     sceFsUfsAllocateSaveData=allocate; sceFsInitCreatePfsSaveDataOpt=init; sceFsCreatePfsSaveDataImage=image;
-    for (mode=0;mode<=8;mode++) {
+    for (mode=0;mode<=9;mode++) {
         unlink(key); unlink(volume); sync_calls=close_calls=kernel_writes=0;
         int result=createSaveEmpty(volume,key,131072);
         assert(mode==0?result==0:result<0);
         if (mode==1) unchanged(volume);
         if (mode==2) { unchanged(key); assert(!kernel_writes); }
         if (mode==8) assert(!kernel_writes && !close_calls);
+        if (mode==9) {
+            char detail[192]; google_restore_last_failure(detail,sizeof(detail));
+            assert(strstr(detail,"native=-777 call=sceFsUfsAllocateSaveData"));
+            FILE *log=fopen("build/host/google_restore.log","rb");assert(log);
+            char line[384];int found=0;
+            while(fgets(line,sizeof(line),log))
+                if(strstr(line,"stage=save image allocation op=10")&&
+                    strstr(line,"native=-777 call=sceFsUfsAllocateSaveData result=failed"))found=1;
+            assert(!fclose(log)&&found);
+        }
     }
     unlink(key); unlink(volume); rmdir("build/host/create");
     puts("Exclusive save creation tests passed (racing key/volume, negative descriptors, write/sync/close failures, 64-bit sizing).");

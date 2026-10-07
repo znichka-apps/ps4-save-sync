@@ -5,7 +5,7 @@ mkdir -p build/host/include build/host/store
 # Tests never embed local OAuth registration values.
 printf '%s\n' '#define GDRIVE_CLIENT_ID "synthetic-client"' '#define GDRIVE_CLIENT_SECRET "synthetic-secret"' > build/host/include/google_build_config.h
 cc -std=gnu11 -Wall -Wextra -Werror -Wno-deprecated-declarations -fsanitize=address,undefined -g \
-  -Ibuild/host/include -Iinclude tools/test_google_drive.c source/google_upload.c source/google_download.c source/google_backup.c source/cJSON.c -lzip -lcurl -lSDL2 -lmbedtls -lmbedx509 -lmbedcrypto -lm -o build/host/test_google_drive
+  -DGOOGLE_RESTORE_LOG_PATH='"build/host/google_restore.log"' -Ibuild/host/include -Iinclude tools/test_google_drive.c source/google_upload.c source/google_download.c source/google_restore_log.c source/google_backup.c source/cJSON.c -lzip -lcurl -lSDL2 -lmbedtls -lmbedx509 -lmbedcrypto -lm -o build/host/test_google_drive
 build/host/test_google_drive
 cc -std=gnu11 -Wall -Wextra -Werror -Wno-deprecated-declarations -fsanitize=address,undefined -g \
   -Iinclude tools/test_google_ca.c -lcurl -lmbedtls -lmbedx509 -lmbedcrypto -o build/host/test_google_ca
@@ -41,13 +41,13 @@ for platform in host ps4; do
 done
 
 cc -std=gnu11 -Wall -Wextra -Werror -Wno-deprecated-declarations -fsanitize=address,undefined -g \
-  -DGOOGLE_BACKUP_CACHE='"build/host/cache/"' -Iinclude tools/test_google_download.c \
-  source/google_download.c source/google_backup.c source/cJSON.c -lzip -lcurl -lmbedcrypto -o build/host/test_google_download
+  -DGOOGLE_BACKUP_CACHE='"build/host/cache/"' -DGOOGLE_RESTORE_LOG_PATH='"build/host/google_restore.log"' -Iinclude tools/test_google_download.c \
+  source/google_download.c source/google_restore_log.c source/google_backup.c source/cJSON.c -lzip -lcurl -lmbedcrypto -o build/host/test_google_download
 build/host/test_google_download
 
 cc -std=gnu11 -Wall -Wextra -Werror -Wno-deprecated-declarations -fsanitize=address,undefined -g \
-  -DGOOGLE_BACKUP_CACHE='"/tmp/ps4-save-sync-restore-cache/"' -Iinclude tools/test_google_restore_stage.c \
-  source/google_restore.c source/restore_fs.c source/google_download.c source/google_backup.c source/cJSON.c \
+  -DGOOGLE_BACKUP_CACHE='"/tmp/ps4-save-sync-restore-cache/"' -DGOOGLE_RESTORE_LOG_PATH='"build/host/google_restore.log"' -Iinclude tools/test_google_restore_stage.c \
+  source/google_restore.c source/google_restore_log.c source/restore_fs.c source/google_download.c source/google_backup.c source/cJSON.c \
   -lzip -lcurl -lmbedcrypto -Wl,--wrap=rmdir -o build/host/test_google_restore_stage
 build/host/test_google_restore_stage
 
@@ -60,7 +60,7 @@ cc -std=gnu11 -Wall -Wextra -Werror -D__PS4__ \
   -c source/google_replace_ps4.c -o build/host/google_replace_ps4.o
 
 cc -std=gnu11 -Wall -Wextra -Werror -fsanitize=address,undefined -g \
-  -Itools/restore_host_include -Iinclude tools/test_save_create.c -o build/host/test_save_create
+  -DGOOGLE_RESTORE_LOG_PATH='"build/host/google_restore.log"' -Itools/restore_host_include -Iinclude tools/test_save_create.c source/google_restore_log.c -o build/host/test_save_create
 build/host/test_save_create
 
 cc -std=gnu11 -Wall -Wextra -Werror -fsanitize=address,undefined -g -D__PS4__ \
@@ -74,7 +74,7 @@ cc -std=gnu11 -Wall -Wextra -Werror -fsanitize=address,undefined -g \
 build/host/test_save_unmount
 
 cc -std=gnu11 -Wall -Wextra -Werror -fsanitize=address,undefined -g \
-  -Itools/restore_host_include -Iinclude tools/test_google_restore_ps4.c -lmbedcrypto \
+  -DGOOGLE_RESTORE_LOG_PATH='"build/host/google_restore.log"' -Itools/restore_host_include -Iinclude tools/test_google_restore_ps4.c source/google_restore_log.c -lmbedcrypto \
   -o build/host/test_google_restore_ps4
 build/host/test_google_restore_ps4
 cc -std=gnu11 -Wall -Wextra -Werror -fsanitize=address,undefined -g \

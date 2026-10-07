@@ -7,6 +7,7 @@
 #include "settings.h"
 #include "google_restore.h"
 #include "google_replace.h"
+#include "google_restore_log.h"
 
 typedef struct {
     uint32_t user;
@@ -32,7 +33,11 @@ static int absent(void *p,const google_backup *b)
     save_entry_t save={0};
     save.title_id=(char*)b->title;
     save.dir_name=(char*)b->directory;
-    return cancel(p) ? -1 : orbis_SaveTargetAbsent(&save,c->user);
+    int status=cancel(p) ? -1 : orbis_SaveTargetAbsent(&save,c->user);
+    int error=errno;
+    google_restore_log("target absence",8,status==1?0:error,0,status,"SaveTargetAbsent",status!=1);
+    errno=error;
+    return status;
 }
 
 static int import_staged(void *p,const google_backup *b,const char *stage)
@@ -46,6 +51,8 @@ static int import_staged(void *p,const google_backup *b,const char *stage)
     errno=0;
     int account_ok=allowed && account_id_refresh_live(c->user,&apollo_config.account_id,&account_status);
     int account_error=errno;
+    google_restore_log("account lookup",10,account_ok?0:account_error,0,account_status,
+        "sceUserServiceGetNpAccountId",allowed&&!account_ok);
     if (b->replace_trace && allowed) {
         char detail[80];
         snprintf(detail,sizeof(detail),"result=%d native=%d errno=%d call=sceUserServiceGetNpAccountId",
@@ -54,11 +61,20 @@ static int import_staged(void *p,const google_backup *b,const char *stage)
     }
     if (allowed && !account_ok)
         snprintf(((google_backup*)b)->diagnostic,sizeof(b->diagnostic),
-            "Local PS4 account ID unavailable [sceUserServiceGetNpAccountId=%d]. ZIP retained.",account_status);
+            "Account lookup failed [op=10 errno=%d zip=0 native=%d call=sceUserServiceGetNpAccountId]. ZIP retained.",
+            account_error,account_status);
     errno=0;
     int ok=allowed && account_ok && orbis_ImportStagedSave(stage,b->title,b->directory,c->user,cancel,p,&mount_blocked,
         b->replace_trace?b->user:0);
     int import_error=errno;
+    char import_detail[192]={0};
+    if (allowed && account_ok) {
+        google_restore_last_failure(import_detail,sizeof(import_detail));
+        google_restore_log("PS4 import adapter",10,ok?0:import_error,0,ok,"ImportStagedSave",!ok);
+        if (!ok && !((google_backup*)b)->diagnostic[0])
+            snprintf(((google_backup*)b)->diagnostic,sizeof(b->diagnostic),"%s",
+                import_detail[0]?import_detail:"PS4 import failed [op=10 errno=0 zip=0 native=0 call=ImportStagedSave]; ZIP retained.");
+    }
     if (b->replace_trace) {
         char detail[64];
         snprintf(detail,sizeof(detail),"result=%d native=%d errno=%d call=%s",ok,ok,ok?0:import_error,
@@ -68,7 +84,7 @@ static int import_staged(void *p,const google_backup *b,const char *stage)
     if (mount_blocked) {
         ((google_backup*)b)->mount_blocked=1;
         snprintf(((google_backup*)b)->diagnostic,sizeof(b->diagnostic),
-            "Save mount state uncertain after staged import. Stop save operations; ZIP retained.");
+            "Mount uncertain; stop save operations. %.130s",import_detail);
     }
     errno=import_error;
     return ok && !mount_blocked;
@@ -76,6 +92,7 @@ static int import_staged(void *p,const google_backup *b,const char *stage)
 
 int google_restore_local(google_backup *b,int (*cancelled)(void*),int (*completed)(void*),void *data)
 {
+    google_restore_clear_failure();
     restore_context c={.user=b->user,.cancel=cancelled,.finish=completed,.data=data};
     google_restore_io io={&c,cancel,absent,import_staged,finish};
     return google_restore_run(b,&io);
