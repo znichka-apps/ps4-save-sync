@@ -348,6 +348,9 @@ static int LoadSounds(void* data)
 		}
 
 		ambient_audio_stereo(music, loop_samples, &cursor, pSampleData, AUDIO_SAMPLES);
+		/* Keep the same loop and toggle, with a slightly quieter output level. */
+		for (size_t i = 0; i < AUDIO_SAMPLES * 2; i++)
+			pSampleData[i] = (int16_t)((int32_t)pSampleData[i] * 85 / 100);
 
 		/* Output audio */
 		sceAudioOutOutput(audio, NULL);	// NULL: wait for completion

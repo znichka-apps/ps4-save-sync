@@ -12,37 +12,46 @@ credits and licenses remain in place.
 
 ## How to use in the current UI
 
-Open **Google Drive** from the main screen and press Square for the two-page
+Open **Google Drive** from the main screen and press **□** for the two-page
 **How to use** guide. It is also listed in Settings.
 
 1. In Settings, choose **Connect Google Drive** and complete the displayed
    verification URL and user code.
 2. In **HDD Saves**, select a save and choose **Back up to Google Drive**.
-3. Open **Google Drive**, select a backup, and Confirm to download it. The app
+3. Open **Google Drive**, select a backup, and press **×** to download it. The app
    checks its checksum, ZIP contents, and SFO before making it ready.
-4. Confirm again to restore into an **empty** save slot. An existing target is
+4. Press **×** again to restore into an **empty** save slot. An existing target is
    refused. The backup remains in Drive; failed restores retain the ZIP.
-5. Triangle on a ready download offers **Replace** for an occupied slot. Before
-   using it, keep a separate copy of the current save. Replace uploads and
-   verifies a rollback backup, then removes the target. It is not atomic and
-   recovery is best effort. Trying an empty disposable slot and verifying it on
-   the PS4 is the safer path.
+5. Press **△ Replace** for an occupied slot. You do not need to delete the
+   existing save first. Keep a separate copy of it before replacing. Replace
+   uploads and verifies a rollback backup, then removes the target. It is
+   best-effort and not atomic; power loss can leave a missing or partial save.
+6. Press **○** to discard a ready download or return to the menu.
 
-For cross-console use, the Andrey profiles on both consoles need the **same
-Apollo offline Account ID**. Use **User Tools > Activate PS4 Accounts** for an
-unactivated profile, then reboot. This does not require PSN sign-in; Chiaki can
-still use the activated account. If account-ID lookup fails, check
-`/data/ps4-save-sync/google_restore.log`, activate the local account if needed,
+## Cross-console account setup
+
+Both PS4 profiles need the **same offline Account ID** for cross-console use;
+their local user IDs may differ. If a profile needs activation, use this app's
+**User Tools > Activate PS4 Accounts**, which is included in **PS4 Cloud Save by
+Znichka**. Reboot when prompted. No separate Apollo download or PSN sign-in is
+needed. Chiaki can still use the activated account. If account-ID lookup fails,
+check `/data/ps4-save-sync/google_restore.log`, activate the local account if needed,
 reboot, and retry. Do not use a backup's account ID or zero as a substitute.
 
-Console testing reported by the owner confirms Google connection, Drive
-`files.list`, refresh after a full app restart, local disconnect, and reconnect.
-The owner also confirmed two separate ZIP uploads of the same save, verified
-the archive contents, and verified the original game save. Those are reported
-console upload results. The owner reports browsing and downloaded-backup
-validation on PS4 as well. The owner reports a successful empty-slot restore
-on a second PS4 and that the game loaded it. Replacement and recovery are not
-yet verified on PS4.
+## Console test status
+
+The owner confirmed Google connection, Drive `files.list`, refresh after a full
+app restart, local disconnect and reconnect, two separate ZIP uploads of the
+same save, archive contents, and the original game save. The owner also
+confirmed browsing and downloaded-backup validation on PS4. After matching the
+offline Account IDs on both PS4 profiles, the owner confirmed a successful
+cross-console empty-slot restore and a successful **△ Replace**. The restored
+game progress loaded.
+
+Recovery retry, power-loss interruption, and controlled failure-injection tests
+remain unverified on PS4. The broader disposable-save and stress test checklists
+below are still pending; they extend the confirmed normal restore and Replace
+flows.
 
 ## Build registration
 
@@ -76,9 +85,8 @@ confidential; these values will necessarily be present in the installed binary.
 Settings contains **Google Drive Backups**, **Connect Google Drive**, **Connection Status**, and
 **Disconnect Google Drive**. Connect displays Google's returned verification URL
 and case-sensitive code while a worker polls at the returned interval. A
-`slow_down` response adds five seconds to subsequent intervals. The console's
-Cancel button (Circle or Cross, shown on screen) cancels polling or network work;
-after the result, Cancel returns to Settings. Local
+`slow_down` response adds five seconds to subsequent intervals. The **○** button
+cancels polling or network work; after the result, Cancel returns to Settings. Local
 credential updates finish atomically before leaving the result screen. Other
 settings/save actions are suspended while this screen is open, preventing
 overlapping app save-data mounts; rendering and controller input continue.
@@ -289,7 +297,7 @@ unconnected account may be inaccessible.
 
 The browser requests ten files per page, ordered by Drive creation time newest
 first. It shows game/title ID, and the selected save directory, backup UTC and
-byte size. Up/Down selects a row, Confirm downloads it, R1 fetches the next page,
+byte size. Up/Down selects a row, **×** downloads it, R1 fetches the next page,
 and Cancel returns. Empty pages can still have a next page. Reopen the entry to
 restart from page one. Malformed backups are excluded and counted on that page;
 invalid page tokens and a token repeating the current page fail closed. The
@@ -338,7 +346,10 @@ does not mount, modify, overwrite or extract a game save.
 MD5/CRC consistency checks detect transfer/archive corruption; they do not
 provide authenticity against an account owner editing both content and metadata.
 
-## Verify browsing and download on PS4 (pending)
+## Broader browsing and download checks on PS4 (pending)
+
+The owner confirmed normal browsing and downloaded-backup validation on PS4.
+The following additional cases remain pending.
 
 1. Build/install this milestone with OpenOrbis and the existing verified TLS and
    libzip dependencies. Host results do not assert PS4 ABI or installation success.
@@ -361,8 +372,8 @@ provide authenticity against an account owner editing both content and metadata.
 
 ## Restore into an empty local slot
 
-After **validation passed**, the panel shows **Confirm: Restore (empty slot
-only)**. Confirmation identifies the game, title ID, save directory, backup UTC
+After **validation passed**, the panel shows **× empty slot**. Confirmation
+identifies the game, title ID, save directory, backup UTC
 and current PS4 user ID. Declining confirmation or cancelling the ready panel
 discards only the private ZIP. It never deletes a game save. Confirmation does
 not authorize an overwrite.
@@ -396,8 +407,8 @@ successful restore.
 
 The local PS4 user must have a nonzero account ID so the imported SFO and save
 database can be assigned to that user. A PlayStation Network link or session is
-not required. For an unactivated local user, use Apollo's **User Tools > Activate
-PS4 Accounts**, reboot as Apollo requests, then retry restore. This is a user
+not required. For an unactivated local user, use this app's **User Tools > Activate
+PS4 Accounts**, reboot when prompted, then retry restore. This is a user
 action; restore never invents or substitutes an account ID. The import refreshes
 the ID through `sceUserServiceGetNpAccountId` and stops before mounting or
 copying if that SDK call fails or returns zero. The downloaded ZIP and any
@@ -427,9 +438,9 @@ termination also requires manual inspection and does not imply success.
 
 ## Replace an existing save (best effort)
 
-Triangle on a ready Google download opens a separate replacement confirmation.
+**△** on a ready Google download opens a separate replacement confirmation.
 The confirmation names the title, save directory and PS4 user and warns that
-power loss can leave the save missing or partial. Cross retains the existing
+power loss can leave the save missing or partial. **×** retains the existing
 empty-slot operation. Replacement is allowed only for a confirmed present
 target and a ZIP whose complete archive, checksum and embedded SFO match that
 title and directory.
@@ -495,13 +506,16 @@ If the private SDK mount or unmount call reports failure, its return and POSIX
 stops before rollback because the firmware mount state cannot be confirmed.
 There is no automatic unmount retry.
 
-### Disposable-save replacement test on PS4
+### Broader disposable-save replacement test on PS4 (pending)
+
+The normal **△ Replace** flow succeeded on PS4. This additional checklist,
+including recovery retry and controlled failure injection, remains pending.
 
 1. Close the game. Use a disposable save with known old progress on the target
    console and newer progress in a Drive ZIP from the same title ID and exact
    save directory. Make and verify an independent USB copy of the old save first.
-2. Download the newer ZIP. Confirm Cross still refuses the occupied slot. Press
-   Triangle, check the title, directory and user in the replacement warning, and
+2. Download the newer ZIP. Confirm **×** still refuses the occupied slot. Press
+   **△**, check the title, directory and user in the replacement warning, and
    decline once; verify the old progress still loads. Repeat and accept.
 3. With development logging or a breakpoint at the delete checkpoint, verify
    that a new rollback file is already in the marked Drive folder with the
@@ -523,7 +537,10 @@ There is no automatic unmount retry.
    new data had fully copied; inspect the save and the retained files before
    any further operation. Never use this test on the only copy of valued data.
 
-## Safe disposable-save restore test on PS4 (pending)
+## Broader disposable-save restore and stress tests on PS4 (pending)
+
+The normal cross-console empty-slot restore succeeded on PS4. These additional
+disposable-save, failure-injection, and stress checks remain pending.
 
 1. Build/install with OpenOrbis and the existing dependencies. Keep the game
    closed throughout download/restore. Use one current PS4 user and a genuinely
@@ -561,7 +578,7 @@ There is no automatic unmount retry.
    ownership patching and unmount. Check UI responsiveness, rejection of overlapping
    operations and continued token isolation/TLS verification. Repeat export/upload
    regressions. Repeat the empty disposable-slot procedure on each target console
-   before relying on cross-console use.
+   as part of broader validation.
 
 ## Credential exclusion
 

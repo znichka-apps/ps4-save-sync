@@ -14,12 +14,12 @@ The original developer does not endorse this fork.
    displayed URL and code. In **HDD Saves**, select the save and choose
    **Back up to Google Drive**.
 2. On the destination PS4, connect to the same Google Drive account. Open
-   **Google Drive**, choose the backup, and press Cross to download it. The app
+   **Google Drive**, choose the backup, and press **×** to download it. The app
    validates the download, ZIP, and save metadata before offering restore.
 3. Choose the restore action for the destination:
-   - **Save already exists:** press **Triangle: Replace**. You do not need to
+   - **Save already exists:** press **△ Replace**. You do not need to
      delete the existing save.
-   - **Empty save slot:** press **Cross: empty-slot restore**.
+   - **Empty save slot:** press **× empty-slot restore**.
 
 Both PS4 profiles need the **same offline Account ID**. Their local user IDs
 can differ. Set the Account ID using **User Tools > Activate PS4 Accounts** in

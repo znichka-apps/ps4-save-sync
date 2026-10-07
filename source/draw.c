@@ -373,8 +373,21 @@ static void drawMainCards(uint8_t alpha)
 	SetFontAlign(FONT_ALIGN_SCREEN_CENTER);
 	SetFontColor(APP_FONT_COLOR | alpha, 0);
 	SetFontSize(36, 40);
-	DrawString(0, 921, "Left / Right  Navigate       Confirm  Open       Back  Exit");
+	DrawString(0, 921, "Left / Right  Navigate       \x10 Open       \x13 Exit");
 	SetFontAlign(FONT_ALIGN_LEFT);
+}
+
+static void drawStartupIdentity(u8 alpha)
+{
+	DrawTexture(&menu_textures[znichka_icon_png_index], 144, 134, 0,
+		78, 78, 0xFFFFFF00 | alpha);
+	SetFontAlign(FONT_ALIGN_LEFT);
+	SetFontColor(APP_FONT_TITLE_COLOR | alpha, 0);
+	SetFontSize(72, 76);
+	DrawString(248, 132, "PS4 Cloud Save");
+	SetFontColor(0xE9EEF900 | alpha, 0);
+	SetFontSize(30, 36);
+	DrawString(252, 214, "by Znichka");
 }
 
 void drawSplashLogo(int mode)
@@ -404,7 +417,7 @@ void drawSplashLogo(int mode)
 			logo_a_t = 0xFF;
 		u8 logo_a = (u8)logo_a_t;
 
-		DrawTextureCentered(&menu_textures[znichka_logo_png_index], SCREEN_WIDTH/2, SCREEN_HEIGHT /2, 0, 1060, 328, 0xFFFFFF00 | logo_a);
+		drawStartupIdentity(logo_a);
 
 		//flush and flip
 		SDL_RenderPresent(renderer);
@@ -425,7 +438,7 @@ void drawEndLogo(void)
 		DrawBackground2D(0x070A12FF);
 
 		//App description
-		DrawTextureCentered(&menu_textures[znichka_logo_png_index], SCREEN_WIDTH/2, SCREEN_HEIGHT /2, 0, 1060, 328, 0xFFFFFF00 | 0xFF);
+		drawStartupIdentity(0xFF);
 
 		rect.y = 0;
 		SDL_SetRenderDrawColor(renderer, 0, 0, 0, 0xFF);
