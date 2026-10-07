@@ -253,7 +253,8 @@ static int initPad(void)
 static int LoadTextures_Menu(void)
 {
 	texture_mem = malloc(256 * 32 * 4);
-	menu_textures = (png_texture *)calloc(TOTAL_MENU_TEXTURES, sizeof(png_texture));
+	if (!menu_textures)
+		menu_textures = (png_texture *)calloc(TOTAL_MENU_TEXTURES, sizeof(png_texture));
 	
 	if(!texture_mem || !menu_textures)
 		return 0; // fail!
@@ -580,6 +581,14 @@ s32 main(s32 argc, const char* argv[])
 		return (-1);
 	}
 
+	// Present the splash before the remaining services, fonts and menus initialize.
+	menu_textures = (png_texture *)calloc(TOTAL_MENU_TEXTURES, sizeof(png_texture));
+	if (!menu_textures ||
+		!LoadMenuTexture(APOLLO_APP_PATH "images/znichka_icon.png", znichka_icon_png_index) ||
+		!LoadMenuTexture(APOLLO_APP_PATH "images/cloud_save_logo.png", cloud_save_logo_png_index))
+		return (-1);
+	drawSplashLogo();
+
 	// Initialize jailbreak
 	if (!initialize_jbc() || !initVshDataMount())
 	{
@@ -646,11 +655,6 @@ s32 main(s32 argc, const char* argv[])
 
 	// dedicated to Leon & Luna ~ in loving memory
 
-#ifndef APOLLO_ENABLE_LOGGING
-	// Splash screen logo (fade-in)
-	drawSplashLogo(1);
-#endif
-
 	// Setup font
 	SetExtraSpace(-15);
 	SetCurrentFont(font_adonais_regular);
@@ -658,17 +662,8 @@ s32 main(s32 argc, const char* argv[])
 	registerSpecialChars();
 	initMenuOptions();
 
-#ifndef APOLLO_ENABLE_LOGGING
-	// Splash screen logo (fade-out)
-	drawSplashLogo(-1);
-#endif
-	
 	// Start BGM audio thread
 	SDL_CreateThread(&LoadSounds, "audio_thread", NULL);
-
-#ifndef APOLLO_ENABLE_LOGGING
-	Draw_MainMenu_Ani();
-#endif
 
 	while (!close_app)
 	{
@@ -697,8 +692,7 @@ s32 main(s32 argc, const char* argv[])
 		SDL_RenderPresent(renderer);
 	}
 
-	if (apollo_config.doAni)
-		drawEndLogo();
+	drawEndLogo();
 
     // Join Google worker before shutting down SDL or global libcurl.
     google_drive_shutdown();

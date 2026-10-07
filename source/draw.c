@@ -355,12 +355,12 @@ static void drawMainCards(uint8_t alpha)
 		int y = 440 + (i / 4) * 208;
 		int active = (menu_sel == i);
 		SDL_Rect card = {x, y, 380, 180};
-		SDL_SetRenderDrawColor(renderer, active ? 24 : i == 4 ? 17 : 12,
-			active ? 29 : i == 4 ? 34 : 19, active ? 68 : i == 4 ? 65 : 38,
+		SDL_SetRenderDrawColor(renderer, active ? 24 : 12,
+			active ? 29 : 19, active ? 68 : 38,
 			active ? alpha * 235 / 255 : alpha * 220 / 255);
 		SDL_RenderFillRect(renderer, &card);
-		SDL_SetRenderDrawColor(renderer, active || i == 4 ? 246 : 115,
-			active || i == 4 ? 211 : 126, active || i == 4 ? 92 : 165, alpha);
+		SDL_SetRenderDrawColor(renderer, active ? 246 : 115,
+			active ? 211 : 126, active ? 92 : 165, alpha);
 		SDL_RenderDrawRect(renderer, &card);
 		drawCardIcon(i, x + 56, y + 79, active, alpha);
 		SetFontColor((active ? 0xF6D35C00 : APP_FONT_COLOR) | alpha, 0);
@@ -379,77 +379,24 @@ static void drawMainCards(uint8_t alpha)
 
 static void drawStartupIdentity(u8 alpha)
 {
-	DrawTexture(&menu_textures[znichka_icon_png_index], 144, 134, 0,
-		78, 78, 0xFFFFFF00 | alpha);
-	SetFontAlign(FONT_ALIGN_LEFT);
-	SetFontColor(APP_FONT_TITLE_COLOR | alpha, 0);
-	SetFontSize(72, 76);
-	DrawString(248, 132, "PS4 Cloud Save");
-	SetFontColor(0xE9EEF900 | alpha, 0);
-	SetFontSize(30, 36);
-	DrawString(252, 214, "by Znichka");
+	DrawTexture(&menu_textures[znichka_icon_png_index], 64, 56, 0,
+		76, 76, 0xFFFFFF00 | alpha);
+	DrawTexture(&menu_textures[cloud_save_logo_png_index],
+		(SCREEN_WIDTH - 900) / 2, (SCREEN_HEIGHT - 550) / 2, 0,
+		900, 550, 0xFFFFFF00 | alpha);
 }
 
-void drawSplashLogo(int mode)
+void drawSplashLogo(void)
 {
-	int ani, max;
-
-	if (mode > 0)
-	{
-		ani = 0;
-		max = MENU_ANI_MAX;
-	}
-	else
-	{
-		ani = MENU_ANI_MAX;
-		max = 0;
-	}
-
-	for (; ani != max; ani += mode)
-	{
-		// clear the current display buffer
-		SDL_RenderClear(renderer);
-		DrawBackgroundTexture(0, 0xFF);
-		
-		//------------ Backgrounds
-		int logo_a_t = ((ani < 0x20) ? 0 : ((ani - 0x20)*3));
-		if (logo_a_t > 0xFF)
-			logo_a_t = 0xFF;
-		u8 logo_a = (u8)logo_a_t;
-
-		drawStartupIdentity(logo_a);
-
-		//flush and flip
-		SDL_RenderPresent(renderer);
-	}
+	SDL_RenderClear(renderer);
+	DrawBackground2D(0x071026FF);
+	drawStartupIdentity(0xFF);
+	SDL_RenderPresent(renderer);
 }
 
 void drawEndLogo(void)
 {
-	SDL_Rect rect = {
-		.x = 0,
-		.w = SCREEN_WIDTH,
-	};
-
-	for (rect.h = 0; rect.h <= SCREEN_HEIGHT/2; rect.h += 3)
-	{
-		// clear the current display buffer
-		SDL_RenderClear(renderer);
-		DrawBackground2D(0x070A12FF);
-
-		//App description
-		drawStartupIdentity(0xFF);
-
-		rect.y = 0;
-		SDL_SetRenderDrawColor(renderer, 0, 0, 0, 0xFF);
-		SDL_RenderFillRect(renderer, &rect);
-
-		rect.y = SCREEN_HEIGHT - rect.h;
-		SDL_RenderFillRect(renderer, &rect);
-
-		//flush and flip
-		SDL_RenderPresent(renderer);
-	}
+	drawSplashLogo();
 }
 
 static void _draw_MainMenu(uint8_t alpha)

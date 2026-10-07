@@ -76,6 +76,17 @@ static void google_draw_help(void)
         APP_FONT_TITLE_COLOR | 0xFF, 0xffffffff, 0);
     SetFontAlign(FONT_ALIGN_LEFT);
     if (google_help_page == 1) {
+        google_help_line(205, "ACCOUNT SETUP (BOTH PS4S)", 1);
+        google_help_line(285, "Both PS4 profiles must use the same offline Account ID.", 0);
+        google_help_line(355, "Their local PS4 user IDs can be different.", 0);
+        google_help_line(425, "In this app, on each PS4: User Tools > Activate PS4 Accounts.", 0);
+        google_help_line(495, "Enter the same offline Account ID for the profile you use.", 0);
+        google_help_line(565, "Reboot each PS4 when prompted.", 0);
+        google_help_line(635, "Offline PS4 account activation is built into", 0);
+        google_help_line(705, "PS4 Cloud Save by Znichka.", 0);
+        google_help_line(775, "No separate Apollo download or PSN sign-in is needed.", 0);
+        google_help_line(845, "Chiaki can still use the activated profile.", 0);
+    } else if (google_help_page == 2) {
         google_help_line(205, "BACK UP AND RESTORE", 1);
         google_help_line(285, "1. Settings > Connect Google Drive. Follow the URL and code.", 0);
         google_help_line(360, "2. HDD Saves > select a save > Back up to Google Drive.", 0);
@@ -97,7 +108,7 @@ static void google_draw_help(void)
     }
     SetFontSize(37, 43);
     SetFontColor(APP_FONT_COLOR | 0xFF, 0);
-    DrawFormatString(155, 975, "L1 / R1: page       %c / %c close",
+    DrawFormatString(155, 975, "Page %d / 3    L1 / R1: page       %c / %c close", google_help_page,
         google_button_symbol(footer_ico_square_png_index),
         google_button_symbol(footer_ico_circle_png_index));
 }
@@ -128,8 +139,8 @@ int google_drive_ui_frame(void)
     google_backup pending_backup={0};
     if (!google_panel) return 0;
     if (google_help_page) {
-        if (orbisPadGetButtonPressed(ORBIS_PAD_BUTTON_R1)) google_help_page = 2;
-        if (orbisPadGetButtonPressed(ORBIS_PAD_BUTTON_L1)) google_help_page = 1;
+        if (orbisPadGetButtonPressed(ORBIS_PAD_BUTTON_R1) && google_help_page < 3) google_help_page++;
+        if (orbisPadGetButtonPressed(ORBIS_PAD_BUTTON_L1) && google_help_page > 1) google_help_page--;
         if (orbisPadGetButtonPressed(ORBIS_PAD_BUTTON_SQUARE) ||
             orbisPadGetButtonPressed(ORBIS_PAD_BUTTON_CIRCLE)) {
             google_draw_help();
