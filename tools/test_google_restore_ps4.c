@@ -57,7 +57,10 @@ int main(void) {
     assert(google_restore_local(&b,never_cancel,completed,NULL)==GOOGLE_UPLOAD_SUCCESS&&import_calls==2);
     lookup_status=-1234;
     assert(google_restore_local(&b,never_cancel,completed,NULL)==GOOGLE_UPLOAD_FAILED&&import_calls==2);
-    assert(apollo_config.account_id==0 && strstr(b.diagnostic,"native=-1234 call=sceUserServiceGetNpAccountId"));
+    assert(apollo_config.account_id==0 && strstr(b.diagnostic,"account ID lookup failed [op=10 native=-1234]"));
+    assert(strstr(b.diagnostic,"Restore needs it for save ownership"));
+    assert(strstr(b.diagnostic,"User Tools > Activate PS4 Accounts, reboot, then retry"));
+    assert(strstr(b.diagnostic,"ZIP retained"));
     FILE *log=fopen("build/host/google_restore.log","rb");assert(log);
     char line[512];int logged=0;
     while(fgets(line,sizeof(line),log))if(strstr(line,"stage=account lookup op=10 errno=0 zip=0 native=-1234"))logged=1;
@@ -66,7 +69,10 @@ int main(void) {
     assert(!strcmp(last_phase,"import adapter: result=0 native=0 errno=0 call=account_id"));
     lookup_status=0;lookup_id=0;
     assert(google_restore_local(&b,never_cancel,completed,NULL)==GOOGLE_UPLOAD_FAILED&&import_calls==2);
-    assert(apollo_config.account_id==0 && strstr(b.diagnostic,"native=0 call=sceUserServiceGetNpAccountId"));
+    assert(apollo_config.account_id==0 && strstr(b.diagnostic,"This PS4 user has no account ID"));
+    assert(strstr(b.diagnostic,"Restore needs one for save ownership"));
+    assert(strstr(b.diagnostic,"User Tools > Activate PS4 Accounts, reboot, then retry"));
+    assert(strstr(b.diagnostic,"[op=10 native=0]. ZIP retained."));
     assert(!strcmp(last_lookup_phase,"import account lookup: result=0 native=0 errno=0 call=sceUserServiceGetNpAccountId"));
     lookup_id=123;
     import_fail=1;

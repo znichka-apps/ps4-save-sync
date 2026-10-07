@@ -35,8 +35,10 @@ static void google_connect_callback(int sel) { (void)sel; google_drive_ui_start(
 static void google_status_callback(int sel) { (void)sel; google_drive_ui_start(GOOGLE_CHECK); }
 static void google_disconnect_callback(int sel) { (void)sel; google_drive_ui_start(GOOGLE_DISCONNECT); }
 static void google_backups_callback(int sel) { (void)sel; google_drive_ui_start(GOOGLE_BROWSE); }
+static void google_help_callback(int sel) { (void)sel; google_drive_ui_help(); }
 
 menu_option_t menu_options[] = {
+	{ .name = _i18n("Google Drive: How to use"), .type = APP_OPTION_CALL, .callback = google_help_callback },
     { .name = _i18n("Google Drive Backups"), .type = APP_OPTION_CALL, .callback = google_backups_callback },
 	{ .name = _i18n("Connect Google Drive"), .type = APP_OPTION_CALL, .callback = google_connect_callback },
 	{ .name = _i18n("Connection Status"), .type = APP_OPTION_CALL, .callback = google_status_callback },
@@ -279,7 +281,8 @@ int save_app_settings(app_config_t* config)
 	snprintf(filePath, sizeof(filePath), APOLLO_SETTING_PATH "settings.bin", mountResult.mountPathName);
 	write_buffer(filePath, (uint8_t*) config, sizeof(app_config_t));
 
-	updateSaveParams(mountResult.mountPathName, "PS4 Save Sync", _("User Settings"), "www.bucanero.com.ar", 0);
+	updateSaveParams(mountResult.mountPathName, "PS4 Cloud Save by Znichka", _("User Settings"),
+		"Based on Apollo Save Tool by Bucanero", 0);
 	if (sceSaveDataUmount((void*)&mountResult.mountPathName) < 0)
 	{
 		LOG("UMOUNT ERROR");

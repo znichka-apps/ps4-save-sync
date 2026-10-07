@@ -59,10 +59,16 @@ static int import_staged(void *p,const google_backup *b,const char *stage)
             account_ok,account_status,account_ok?0:account_error);
         google_replace_phase(b->user,"import account lookup",detail);
     }
-    if (allowed && !account_ok)
+    if (allowed && !account_ok) {
+        /* The HDD copy writes this ID to both param.sfo and savedata.db.
+           An offline user can obtain one through Apollo's account activation,
+           but an absent or unreadable ID cannot be inferred from the ZIP. */
         snprintf(((google_backup*)b)->diagnostic,sizeof(b->diagnostic),
-            "Account lookup failed [op=10 errno=%d zip=0 native=%d call=sceUserServiceGetNpAccountId]. ZIP retained.",
-            account_error,account_status);
+            account_status == 0 ?
+            "This PS4 user has no account ID. Restore needs one for save ownership. Use User Tools > Activate PS4 Accounts, reboot, then retry [op=10 native=%d]. ZIP retained." :
+            "PS4 user account ID lookup failed [op=10 native=%d]. Restore needs it for save ownership. If unactivated, use User Tools > Activate PS4 Accounts, reboot, then retry. ZIP retained.",
+            account_status);
+    }
     errno=0;
     int ok=allowed && account_ok && orbis_ImportStagedSave(stage,b->title,b->directory,c->user,cancel,p,&mount_blocked,
         b->replace_trace?b->user:0);

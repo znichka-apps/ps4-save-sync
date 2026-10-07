@@ -108,7 +108,7 @@ int google_upload_folder(const google_upload_io *io, char *id, int allow_create)
     if (id[0]) return 1;
     if (!allow_create) return 0;
     google_upload_request q = {.method="POST",.url=FILES "?fields=id",
-        .json="{\"name\":\"PS4 Save Sync\",\"mimeType\":\"application/vnd.google-apps.folder\",\"parents\":[\"root\"],\"appProperties\":{\"ps4SaveSync\":\"" MARKER "\"}}"};
+        .json="{\"name\":\"PS4 Cloud Save by Znichka\",\"mimeType\":\"application/vnd.google-apps.folder\",\"parents\":[\"root\"],\"appProperties\":{\"ps4SaveSync\":\"" MARKER "\"}}"};
     google_upload_response r;
     /* No blind retry after a lost creation response; the next job searches again. */
     ok = call(io,&q,&r,1) && r.status == 200 && identifier(string(r.json,"id"));

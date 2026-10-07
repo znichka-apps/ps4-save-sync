@@ -40,7 +40,7 @@ static void request(void *p, const google_upload_request *q, google_upload_respo
         assert(q->total == backup.size);
         cJSON_Delete(details); cJSON_Delete(j);
     } else if (q->json) {
-        creates++; assert(strstr(q->json,"PS4 Save Sync") && strstr(q->json,"appProperties"));
+        creates++; assert(strstr(q->json,"PS4 Cloud Save by Znichka") && strstr(q->json,"appProperties"));
     }
     if (q->range) {
         assert(google_upload_session_url(q->url));

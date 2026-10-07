@@ -29,5 +29,6 @@ void google_drive_snapshot(google_drive_status *out);
 void google_drive_cancel(void);
 void google_drive_shutdown(void);
 void google_drive_ui_start(int action);
+void google_drive_ui_help(void);
 int google_drive_ui_frame(void);
 #endif

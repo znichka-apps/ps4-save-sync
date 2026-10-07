@@ -10,6 +10,31 @@ Package identity remains `PSSY00001` /
 `IV0000-PSSY00001_00-PS4SAVESYNC00000`, separate from Apollo. Existing upstream
 credits and licenses remain in place.
 
+## How to use in the current UI
+
+Open **Google Drive** from the main screen and press Square for the two-page
+**How to use** guide. It is also listed in Settings.
+
+1. In Settings, choose **Connect Google Drive** and complete the displayed
+   verification URL and user code.
+2. In **HDD Saves**, select a save and choose **Back up to Google Drive**.
+3. Open **Google Drive**, select a backup, and Confirm to download it. The app
+   checks its checksum, ZIP contents, and SFO before making it ready.
+4. Confirm again to restore into an **empty** save slot. An existing target is
+   refused. The backup remains in Drive; failed restores retain the ZIP.
+5. Triangle on a ready download offers **Replace** for an occupied slot. Before
+   using it, keep a separate copy of the current save. Replace uploads and
+   verifies a rollback backup, then removes the target. It is not atomic and
+   recovery is best effort. Trying an empty disposable slot and verifying it on
+   the PS4 is the safer path.
+
+For cross-console use, the Andrey profiles on both consoles need the **same
+Apollo offline Account ID**. Use **User Tools > Activate PS4 Accounts** for an
+unactivated profile, then reboot. This does not require PSN sign-in; Chiaki can
+still use the activated account. If account-ID lookup fails, check
+`/data/ps4-save-sync/google_restore.log`, activate the local account if needed,
+reboot, and retry. Do not use a backup's account ID or zero as a substitute.
+
 Console testing reported by the owner confirms Google connection, Drive
 `files.list`, refresh after a full app restart, local disconnect, and reconnect.
 The owner also confirmed two separate ZIP uploads of the same save, verified
@@ -135,7 +160,8 @@ can remove it after restarting, with no upload active.
 
 Folder discovery pages through non-trashed, root-parent My Drive folders marked
 with private `appProperties.ps4SaveSync = ps4-save-sync.v1`. A folder named
-**PS4 Save Sync** with that marker is created only after a complete empty search.
+**PS4 Cloud Save by Znichka** with that marker is created only after a complete
+empty search. Existing marked folders keep their old names and remain usable.
 The same OAuth client/account reuses it across consoles, even if its name changes.
 If several marked folders exist, both consoles select the oldest creation time,
 with file ID as a deterministic tie-breaker. After creating a folder the worker
@@ -368,12 +394,15 @@ IDs are never trusted. Cancellation or any failure retains the original ZIP;
 partial HDD targets are retained for manual inspection and never reported as a
 successful restore.
 
-The local PS4 user must have a nonzero NP account ID so the imported SFO and
-save database can be assigned to that user. A current PlayStation Network
-session is not required: Apollo also supports offline account activation.
-The import refreshes the account ID through `sceUserServiceGetNpAccountId` and
-stops before mounting or copying if that SDK call fails or returns zero.
-The phase log records its raw native status without exposing the account ID.
+The local PS4 user must have a nonzero account ID so the imported SFO and save
+database can be assigned to that user. A PlayStation Network link or session is
+not required. For an unactivated local user, use Apollo's **User Tools > Activate
+PS4 Accounts**, reboot as Apollo requests, then retry restore. This is a user
+action; restore never invents or substitutes an account ID. The import refreshes
+the ID through `sceUserServiceGetNpAccountId` and stops before mounting or
+copying if that SDK call fails or returns zero. The downloaded ZIP and any
+replacement recovery journal remain available. The phase log records the raw
+native status without exposing the account ID.
 
 Rendering and controller input remain on the main thread. The existing exclusive
 worker serializes save, credential and network phases. Google credentials are
@@ -531,8 +560,8 @@ There is no automatic unmount retry.
    extraction, PFS file sync/close, SFO compatibility, image allocation, DB details,
    ownership patching and unmount. Check UI responsiveness, rejection of overlapping
    operations and continued token isolation/TLS verification. Repeat export/upload
-   regressions. When the second console becomes available, repeat this same empty
-   disposable-slot procedure there before claiming cross-console success.
+   regressions. Repeat the empty disposable-slot procedure on each target console
+   before relying on cross-console use.
 
 ## Credential exclusion
 

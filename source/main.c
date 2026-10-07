@@ -21,6 +21,7 @@
 #include "common.h"
 #include "google_drive.h"
 #include "orbisPad.h"
+#include "ambient_audio.h"
 
 //Menus
 #include "menu.h"
@@ -33,7 +34,6 @@
 #include "font-10x20.h"
 
 //Sound
-#include <math.h>
 #define SAMPLING_FREQ          48000 /* 48khz. */
 #define AUDIO_SAMPLES          256   /* audio samples */
 
@@ -325,12 +325,18 @@ static int LoadTextures_Menu(void)
 
 static int LoadSounds(void* data)
 {
-	/* Original 16-second ambient pad. Integer frequencies make the loop seamless. */
-	const uint32_t loop_samples = SAMPLING_FREQ * 16;
-	uint32_t cursor = 0;
-	int16_t *pSampleData = malloc(AUDIO_SAMPLES * 2 * sizeof(int16_t));
-	if (!pSampleData)
+	(void)data;
+	size_t loop_samples = 0, cursor = 0;
+	int16_t *music = ambient_audio_load(APOLLO_APP_PATH "audio/ambient.wav", &loop_samples);
+	if (!music) {
+		LOG("Unable to load ambient music WAV; music playback disabled");
 		return -1;
+	}
+	int16_t *pSampleData = malloc(AUDIO_SAMPLES * 2 * sizeof(int16_t));
+	if (!pSampleData) {
+		free(music);
+		return -1;
+	}
 
 	// Play the song in a loop
 	while (!close_app)
@@ -341,19 +347,7 @@ static int LoadSounds(void* data)
 			continue;
 		}
 
-		for (int i = 0; i < AUDIO_SAMPLES; i++)
-		{
-			float t = (float)cursor / SAMPLING_FREQ;
-			float swell = 0.76f + 0.18f * sinf(6.2831853f * t / 16.0f);
-			float pad = 0.42f * sinf(6.2831853f * 110.0f * t)
-				+ 0.24f * sinf(6.2831853f * 165.0f * t)
-				+ 0.12f * sinf(6.2831853f * 220.0f * t);
-			int16_t sample = (int16_t)(2100.0f * swell * pad);
-			pSampleData[i * 2] = sample;
-			pSampleData[i * 2 + 1] = sample;
-			if (++cursor == loop_samples)
-				cursor = 0;
-		}
+		ambient_audio_stereo(music, loop_samples, &cursor, pSampleData, AUDIO_SAMPLES);
 
 		/* Output audio */
 		sceAudioOutOutput(audio, NULL);	// NULL: wait for completion
@@ -362,11 +356,13 @@ static int LoadSounds(void* data)
 		{
 			LOG("Failed to output audio");
 			free(pSampleData);
+			free(music);
 			return -1;
 		}
 	}
 
 	free(pSampleData);
+	free(music);
 
 	return 0;
 }

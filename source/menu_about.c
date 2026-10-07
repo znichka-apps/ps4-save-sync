@@ -18,14 +18,6 @@ static char user_id_str[9] = "00000000";
 static char psid_str[] = "0000000000000000 0000000000000000";
 static char account_id_str[] = "0000000000000000";
 
-const char * menu_about_strings[] = { "Bucanero", "Developer",
-									"", "",
-									"PS3", "credits",
-									"Berion", "GUI design",
-									"Dnawrkshp", "Artemis code",
-									"aldostools", "Bruteforce Save Data",
-									NULL };
-
 const char * menu_about_strings_project[] = { "User ID", user_id_str,
 											"Account ID", account_id_str,
 											"Console PSID", psid_str,
@@ -74,50 +66,33 @@ static void _setIdValues()
 
 static void _draw_AboutMenu(u8 alpha)
 {
-	int cnt = 0;
-	u8 alp2 = ((alpha*2) > 0xFF) ? 0xFF : (alpha * 2); 
-    
-    //------------- About Menu Contents
-	DrawTextureCenteredX(&menu_textures[znichka_logo_png_index], SCREEN_WIDTH/2, 105, 0, 480, 149, 0xFFFFFF00 | alp2);
-
-    SetFontAlign(FONT_ALIGN_SCREEN_CENTER);
-	SetCurrentFont(font_adonais_regular);
-	SetFontColor(APP_FONT_MENU_COLOR | alpha, 0);
-	SetFontSize(APP_FONT_SIZE_JARS);
-	DrawStringMono(0, 220, "PlayStation 4 version");
-    
-    for (cnt = 0; menu_about_strings[cnt] != NULL; cnt += 2)
-    {
-        SetFontAlign(FONT_ALIGN_RIGHT);
-		DrawStringMono((SCREEN_WIDTH / 2) - 20, 280 + (cnt * 20), menu_about_strings[cnt]);
-        
-		SetFontAlign(FONT_ALIGN_LEFT);
-		DrawStringMono((SCREEN_WIDTH / 2) + 20, 280 + (cnt * 20), menu_about_strings[cnt + 1]);
-    }
-
-	DrawTexture(&menu_textures[help_png_index], help_png_x, 300 + (cnt * 22), 0, help_png_w, 220, 0xFFFFFF00 | alp2);
-
+	DrawTextureCenteredX(&menu_textures[znichka_logo_png_index], SCREEN_WIDTH/2, 125, 0,
+		390, 121, 0xFFFFFF00 | alpha);
 	SetFontAlign(FONT_ALIGN_SCREEN_CENTER);
+	SetFontColor(APP_FONT_TITLE_COLOR | alpha, 0);
+	SetFontSize(61, 66);
+	DrawString(0, 255, "PS4 Cloud Save by Znichka");
 	SetFontColor(APP_FONT_COLOR | alpha, 0);
-	SetFontSize(APP_FONT_SIZE_DESCRIPTION);
-	DrawString(0, 250 + ((cnt + 3) * 22), _("Console details:"));
-	SetFontSize(APP_FONT_SIZE_SELECTION);
-
-	int off = cnt + 5;
-	for (cnt = 0; menu_about_strings_project[cnt] != NULL; cnt += 2)
-	{
+	SetFontSize(42, 48);
+	DrawString(0, 348, "Znichka / Andrey - project and cloud-save integration");
+	DrawString(0, 410, "Based on Apollo Save Tool by Bucanero");
+	DrawString(0, 472, "Independent fork; Apollo's author does not endorse this project.");
+	DrawString(0, 534, "GPLv3 or later; see LICENSE and README for original notices.");
+	SetFontColor(APP_FONT_TITLE_COLOR | alpha, 0);
+	SetFontSize(46, 52);
+	DrawString(0, 645, _("Console details:"));
+	SetFontColor(APP_FONT_COLOR | alpha, 0);
+	SetFontSize(40, 46);
+	for (int cnt = 0; menu_about_strings_project[cnt] != NULL; cnt += 2) {
+		int y = 720 + cnt * 52;
 		SetFontAlign(FONT_ALIGN_RIGHT);
-		DrawString((SCREEN_WIDTH / 2) - 10, 250 + ((cnt + off) * 22), menu_about_strings_project[cnt]);
-
+		DrawString((SCREEN_WIDTH / 2) - 20, y, menu_about_strings_project[cnt]);
 		SetFontAlign(FONT_ALIGN_LEFT);
-		DrawString((SCREEN_WIDTH / 2) + 10, 250 + ((off + cnt) * 22), menu_about_strings_project[cnt + 1]);
+		DrawString((SCREEN_WIDTH / 2) + 20, y, menu_about_strings_project[cnt + 1]);
 	}
-
 	SetFontAlign(FONT_ALIGN_SCREEN_CENTER);
-	SetCurrentFont(font_adonais_regular);
-	SetFontColor(APP_FONT_MENU_COLOR | alp2, 0);
-	SetFontSize(APP_FONT_SIZE_JARS);
-	DrawStringMono(0, 890, "in memory of Leon & Luna");
+	SetFontSize(38, 44);
+	DrawString(0, 988, "in memory of Leon & Luna");
 	SetFontAlign(FONT_ALIGN_LEFT);
 }
 

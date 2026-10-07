@@ -1,5 +1,5 @@
 # Package metadata.
-TITLE       := PS4 Save Sync
+TITLE       := PS4 Cloud Save by Znichka
 VERSION     := 02.32
 TITLE_ID    := PSSY00001
 CONTENT_ID  := IV0000-PSSY00001_00-PS4SAVESYNC00000
@@ -8,7 +8,7 @@ CONTENT_ID  := IV0000-PSSY00001_00-PS4SAVESYNC00000
 LIBS        := -lc -lkernel -lc++ -lSceAudioOut -lSceUserService -lScePigletv2VSH -lSceSysmodule -lSceFreeType -lSQLite \
                -lScePad -lSceSystemService -lSceSaveData -lSceCommonDialog -lSceMsgDialog -lSceNet -lSceNetCtl -lcurl \
                -lmbedtls -lmbedx509 -lmbedcrypto -lmini18n \
-               -lSceRegMgr -lSceImeDialog -lSDL2 -lapollo -ldbglogger -lz -lzip -ljbc -lmxml -lunrar -lun7zip -ls3m
+               -lSceRegMgr -lSceImeDialog -lSDL2 -lapollo -ldbglogger -lz -lzip -ljbc -lmxml -lunrar -lun7zip
 
 # Additional compile flags.
 EXTRAFLAGS  := -fcolor-diagnostics -Wall -D__PS4__

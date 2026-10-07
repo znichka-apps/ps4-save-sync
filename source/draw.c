@@ -305,11 +305,21 @@ static void drawCardIcon(int index, int x, int y, int active, uint8_t alpha)
 		SDL_RenderDrawLine(renderer, x - 35, y, x + 35, y);
 		SDL_RenderDrawLine(renderer, x, y - 35, x, y + 35);
 		break;
-	case 4: /* Drive's triangular silhouette */
-		SDL_RenderDrawLine(renderer, x - 31, y + 27, x, y - 28);
-		SDL_RenderDrawLine(renderer, x, y - 28, x + 31, y + 27);
-		SDL_RenderDrawLine(renderer, x + 31, y + 27, x - 31, y + 27);
-		SDL_RenderDrawLine(renderer, x - 17, y + 5, x + 17, y + 5);
+	case 4: /* cloud and save arrow */
+		for (int i = 0; i < 12; i++) {
+			float a = 3.1415927f + (float)i * 3.1415927f / 11.0f;
+			float b = 3.1415927f + (float)(i + 1) * 3.1415927f / 11.0f;
+			SDL_RenderDrawLine(renderer, x - 18 + (int)(cosf(a) * 17), y + 9 + (int)(sinf(a) * 17),
+				x - 18 + (int)(cosf(b) * 17), y + 9 + (int)(sinf(b) * 17));
+			SDL_RenderDrawLine(renderer, x + 8 + (int)(cosf(a) * 27), y + 1 + (int)(sinf(a) * 27),
+				x + 8 + (int)(cosf(b) * 27), y + 1 + (int)(sinf(b) * 27));
+		}
+		SDL_RenderDrawLine(renderer, x - 35, y + 9, x - 35, y + 24);
+		SDL_RenderDrawLine(renderer, x - 35, y + 24, x + 35, y + 24);
+		SDL_RenderDrawLine(renderer, x + 35, y + 1, x + 35, y + 24);
+		SDL_RenderDrawLine(renderer, x, y - 12, x, y + 9);
+		SDL_RenderDrawLine(renderer, x - 10, y, x, y + 10);
+		SDL_RenderDrawLine(renderer, x + 10, y, x, y + 10);
 		break;
 	case 5: /* tools */
 		drawOrbit(x, y, 25);
@@ -337,7 +347,7 @@ static void drawMainCards(uint8_t alpha)
 	static const char *labels[8] = {"Trophies", "USB Saves", "HDD Saves", "Online Database",
 		"Google Drive", "User Tools", "Settings", "About"};
 	static const char *details[8] = {"Trophy saves", "USB storage", "Internal storage", "Browse online saves",
-		"Backups and restore", "Local save tools", "App preferences", "App information"};
+		"Cloud backup / restore", "Local save tools", "App preferences", "App information"};
 	SetFontAlign(FONT_ALIGN_LEFT);
 	SDL_SetRenderDrawBlendMode(renderer, SDL_BLENDMODE_BLEND);
 	for (int i = 0; i < 8; i++) {
@@ -345,17 +355,18 @@ static void drawMainCards(uint8_t alpha)
 		int y = 440 + (i / 4) * 208;
 		int active = (menu_sel == i);
 		SDL_Rect card = {x, y, 380, 180};
-		SDL_SetRenderDrawColor(renderer, active ? 24 : 12, active ? 29 : 19,
-			active ? 68 : 38, active ? alpha * 230 / 255 : alpha * 205 / 255);
+		SDL_SetRenderDrawColor(renderer, active ? 24 : i == 4 ? 17 : 12,
+			active ? 29 : i == 4 ? 34 : 19, active ? 68 : i == 4 ? 65 : 38,
+			active ? alpha * 235 / 255 : alpha * 220 / 255);
 		SDL_RenderFillRect(renderer, &card);
-		SDL_SetRenderDrawColor(renderer, active ? 246 : 88, active ? 211 : 81,
-			active ? 92 : 163, alpha);
+		SDL_SetRenderDrawColor(renderer, active || i == 4 ? 246 : 115,
+			active || i == 4 ? 211 : 126, active || i == 4 ? 92 : 165, alpha);
 		SDL_RenderDrawRect(renderer, &card);
 		drawCardIcon(i, x + 56, y + 79, active, alpha);
 		SetFontColor((active ? 0xF6D35C00 : APP_FONT_COLOR) | alpha, 0);
 		SetFontSize(i == 3 ? 34 : 40, i == 3 ? 38 : 44);
 		DrawString(x + 111, y + 50, i == 3 && apollo_config.online_opt ? "FTP Server" : labels[i]);
-		SetFontColor(0x8E9BC200 | alpha, 0);
+		SetFontColor(0xC8D5ED00 | alpha, 0);
 		SetFontSize(30, 34);
 		DrawString(x + 24, y + 132, details[i]);
 	}
@@ -431,8 +442,17 @@ void drawEndLogo(void)
 static void _draw_MainMenu(uint8_t alpha)
 {
 	DrawBackgroundTexture(0, 0xFF);
-	DrawTextureCenteredX(&menu_textures[znichka_logo_png_index], SCREEN_WIDTH/2, 82, 0,
-		800, 248, 0xFFFFFF00 | alpha);
+	DrawTexture(&menu_textures[znichka_icon_png_index], 146, 82, 0,
+		104, 104, 0xFFFFFF00 | alpha);
+	SetFontAlign(FONT_ALIGN_LEFT);
+	SetFontColor(APP_FONT_TITLE_COLOR | alpha, 0);
+	SetFontSize(72, 76);
+	DrawString(276, 77, "PS4 Cloud Save");
+	SetFontColor(0xE9EEF900 | alpha, 0);
+	SetFontSize(38, 44);
+	DrawString(282, 165, "by Znichka");
+	SetFontSize(43, 48);
+	DrawString(146, 304, "Back up and restore PS4 saves with Google Drive");
 	drawMainCards(alpha);
 }
 
@@ -456,9 +476,17 @@ void Draw_MainMenu_Ani(void)
 		//Background
 		DrawBackgroundTexture(0, bg_a);
 		
-		//App logo
-		DrawTextureCenteredX(&menu_textures[znichka_logo_png_index], SCREEN_WIDTH/2, 82, 0,
-			800, 248, 0xFFFFFF00 | logo_a);
+		if (logo_a) {
+			DrawTexture(&menu_textures[znichka_icon_png_index], 146, 82, 0,
+				104, 104, 0xFFFFFF00 | logo_a);
+			SetFontAlign(FONT_ALIGN_LEFT);
+			SetFontColor(APP_FONT_TITLE_COLOR | logo_a, 0);
+			SetFontSize(72, 76);
+			DrawString(276, 77, "PS4 Cloud Save");
+			SetFontColor(0xE9EEF900 | logo_a, 0);
+			SetFontSize(38, 44);
+			DrawString(282, 165, "by Znichka");
+		}
 
 		SDL_RenderPresent(renderer);
 	}

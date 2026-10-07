@@ -12,6 +12,8 @@
 #include "google_replace.h"
 
 static int google_panel;
+static int google_help_page;
+static int google_help_only;
 static unsigned google_selection;
 static size_t google_text_prefix(const char *text, size_t limit)
 {
@@ -32,19 +34,67 @@ static void google_text(const char *text, int y, int bottom)
 {
     char line[73];
     while (*text && y <= bottom) {
-        size_t n = google_text_prefix(text,72);
+        size_t n = google_text_prefix(text,64);
         const char *newline = memchr(text, '\n', n);
         if (newline) n = (size_t)(newline - text);
+        else if (text[n] && text[n] != ' ') {
+            size_t word = n;
+            while (word && text[word] != ' ') word--;
+            if (word) n = word;
+        }
         memcpy(line, text, n); line[n] = 0;
         DrawString(180, y, line);
-        y += 46; text += n;
-        if (*text == '\n') text++;
+        y += 50; text += n;
+        while (*text == ' ' || *text == '\n') text++;
     }
     if (*text) DrawString(180, bottom, "...");
+}
+static void google_help_line(int y, const char *line, int heading)
+{
+    SetFontSize(heading ? 44 : 39, heading ? 50 : 45);
+    SetFontColor((heading ? APP_FONT_TITLE_COLOR : APP_FONT_COLOR) | 0xFF, 0);
+    DrawString(155, y, line);
+}
+static void google_draw_help(void)
+{
+    DrawHeader(cat_opt_png_index, 0, "Google Drive: How to use", NULL,
+        APP_FONT_TITLE_COLOR | 0xFF, 0xffffffff, 0);
+    SetFontAlign(FONT_ALIGN_LEFT);
+    if (google_help_page == 1) {
+        google_help_line(205, "BACK UP AND RESTORE", 1);
+        google_help_line(285, "1. Settings > Connect Google Drive. Follow the URL and code.", 0);
+        google_help_line(360, "2. HDD Saves > select a save > Back up to Google Drive.", 0);
+        google_help_line(435, "3. Open Google Drive on the main screen. Choose a backup.", 0);
+        google_help_line(510, "4. Confirm to download. Checksum, ZIP and SFO are validated.", 0);
+        google_help_line(585, "5. Save exists? Triangle: Replace. Do not delete it first.", 0);
+        google_help_line(690, "6. No save yet? Cross: restore into the empty slot.", 0);
+        google_help_line(765, "Backups stay in Drive; failed restores retain downloaded ZIPs.", 0);
+    } else {
+        google_help_line(205, "ACCOUNTS AND REPLACE", 1);
+        google_help_line(275, "Both PS4 profiles need the same Apollo offline Account ID.", 0);
+        google_help_line(340, "Local user IDs may differ. Use this app: User Tools > Activate PS4 Accounts.", 0);
+        google_help_line(405, "No separate Apollo download or PSN sign-in is needed.", 0);
+        google_help_line(490, "Replace was tested successfully; restored progress loaded.", 0);
+        google_help_line(555, "Keep the console awake until the operation finishes.", 0);
+        google_help_line(620, "Keep a separate backup; Replace removes the target after rollback upload.", 0);
+        google_help_line(685, "Power loss can leave a missing or partial save; recovery is best effort.", 0);
+        google_help_line(770, "Account ID lookup failed? Activate offline, reboot, retry.", 0);
+        google_help_line(835, "Log: /data/ps4-save-sync/google_restore.log", 0);
+    }
+    SetFontSize(37, 43);
+    SetFontColor(APP_FONT_COLOR | 0xFF, 0);
+    DrawString(155, 975, "L1 / R1: page       Square / Back: close");
+}
+void google_drive_ui_help(void)
+{
+    google_help_only = !google_panel;
+    google_panel = 1;
+    google_help_page = 1;
 }
 void google_drive_ui_start(int action)
 {
     google_selection = 0;
+    google_help_page = 0;
     if (!google_drive_start(action, apollo_config.user_id)) {
         if (google_replace_pending(apollo_config.user_id,NULL)!=0) {
             google_panel=1;
@@ -61,8 +111,27 @@ int google_drive_ui_frame(void)
     google_drive_status status;
     google_backup pending_backup={0};
     if (!google_panel) return 0;
+    if (google_help_page) {
+        if (orbisPadGetButtonPressed(ORBIS_PAD_BUTTON_R1)) google_help_page = 2;
+        if (orbisPadGetButtonPressed(ORBIS_PAD_BUTTON_L1)) google_help_page = 1;
+        if (orbisPadGetButtonPressed(ORBIS_PAD_BUTTON_SQUARE) ||
+            orbisPadGetButtonPressed(ORBIS_PAD_BUTTON_CIRCLE)) {
+            google_draw_help();
+            google_help_page = 0;
+            if (google_help_only) google_panel = 0;
+            google_help_only = 0;
+            return 1;
+        }
+        google_draw_help();
+        return 1;
+    }
     google_drive_snapshot(&status);
     int pending=google_replace_pending(apollo_config.user_id,&pending_backup);
+    if (!status.busy && orbisPadGetButtonPressed(ORBIS_PAD_BUTTON_SQUARE)) {
+        google_help_page = 1;
+        google_draw_help();
+        return 1;
+    }
     if (!status.busy && !status.mount_blocked && pending==1 &&
         orbisPadGetButtonPressed(ORBIS_PAD_BUTTON_R1)) {
         if (show_dialog(DIALOG_TYPE_YESNO,
@@ -112,7 +181,7 @@ int google_drive_ui_frame(void)
     }
     DrawHeader(cat_opt_png_index, 0, "Google Drive", NULL, APP_FONT_TITLE_COLOR | 0xFF, 0xffffffff, 0);
     SetFontAlign(FONT_ALIGN_LEFT);
-    SetFontSize(36, 42);
+    SetFontSize(38, 44);
     SetFontColor(APP_FONT_COLOR | 0xFF, 0);
     /* Wrap sanitized text; reserve generous width for Google's returned values. */
     google_text(status.message, 220, status.browsing ? 300 : 375);
@@ -183,18 +252,19 @@ int google_drive_ui_frame(void)
     else
         DrawFormatString(180, 995, "%s: %s", cancel_button,
             status.busy ? "cancel operation" : "return");
+    if (!status.busy) DrawString(1120, 995, "Square: How to use");
     return 1;
 }
 
 static void _draw_OptionsMenu(u8 alpha)
 {
 	int c = 0;
-
-    SetFontSize(APP_FONT_SIZE_SELECTION);
-    for (int ind = 0, y_off = 200; menu_options[ind].name; ind++, y_off += APP_LINE_OFFSET)
+	const int row_height = 51;
+	SetFontSize(43, 47);
+    for (int ind = 0, y_off = 180; menu_options[ind].name; ind++, y_off += row_height)
     {
         if (menu_options[ind].spacer)
-            y_off += APP_LINE_OFFSET;
+			y_off += row_height / 2;
 
         SetFontColor(APP_FONT_COLOR | alpha, 0);
         DrawString(MENU_ICON_OFF + MENU_TITLE_OFF + 50, y_off, menu_options[ind].name);
@@ -229,7 +299,7 @@ static void _draw_OptionsMenu(u8 alpha)
         if (menu_sel == ind)
         {
             DrawTexture(&menu_textures[mark_line_png_index], 0, y_off, 0, SCREEN_WIDTH, menu_textures[mark_line_png_index].height * 2, 0xFFFFFF00 | alpha);
-            DrawTextureCenteredX(&menu_textures[mark_arrow_png_index], MENU_ICON_OFF + MENU_TITLE_OFF, y_off, 0, (2 * APP_LINE_OFFSET) / 3, APP_LINE_OFFSET + 2, 0xFFFFFF00 | alpha);
+			DrawTextureCenteredX(&menu_textures[mark_arrow_png_index], MENU_ICON_OFF + MENU_TITLE_OFF, y_off, 0, (2 * row_height) / 3, row_height + 2, 0xFFFFFF00 | alpha);
         }
     }
 }

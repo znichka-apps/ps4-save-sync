@@ -2,6 +2,9 @@
 set -eu
 cd "$(dirname "$0")/.."
 mkdir -p build/host/include build/host/store
+cc -std=gnu11 -Wall -Wextra -Werror -fsanitize=address,undefined -g \
+  -Iinclude tools/test_ambient_audio.c source/ambient_audio.c -o build/host/test_ambient_audio
+build/host/test_ambient_audio
 # Tests never embed local OAuth registration values.
 printf '%s\n' '#define GDRIVE_CLIENT_ID "synthetic-client"' '#define GDRIVE_CLIENT_SECRET "synthetic-secret"' > build/host/include/google_build_config.h
 cc -std=gnu11 -Wall -Wextra -Werror -Wno-deprecated-declarations -fsanitize=address,undefined -g \
