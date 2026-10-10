@@ -49,21 +49,21 @@ function Save-BrandIcon([int]$width, [int]$height, [string]$relativePath) {
     $graphics.InterpolationMode = [System.Drawing.Drawing2D.InterpolationMode]::HighQualityBicubic
     $graphics.Clear([System.Drawing.Color]::FromArgb(255, 7, 16, 38))
     if ($width -eq $height) {
-        $markSize = [single]($width * .29)
-        $markX = [single]($width * .665)
+        $markSize = [single]($width * .22)
+        $markX = [single]($width * .73)
         $markY = [single]($height * .065)
-        $cloudX = [single]($width * .11)
-        $cloudY = [single]($height * .29)
-        $cloudWidth = [single]($width * .78)
-        $cloudHeight = [single]($height * .55)
+        $cloudX = [single]($width * .08)
+        $cloudY = [single]($height * .25)
+        $cloudWidth = [single]($width * .84)
+        $cloudHeight = [single]($height * .62)
     } else {
-        $markSize = [single]($height * .34)
+        $markSize = [single]($height * .25)
         $markX = [single]($width - $markSize - $height * .08)
         $markY = [single]($height * .07)
-        $cloudX = [single]($width * .09)
-        $cloudY = [single]($height * .19)
-        $cloudWidth = [single]($width * .65)
-        $cloudHeight = [single]($height * .67)
+        $cloudX = [single]($width * .07)
+        $cloudY = [single]($height * .16)
+        $cloudWidth = [single]($width * .70)
+        $cloudHeight = [single]($height * .72)
     }
     $markHeight = [single]($markSize * $mark.Height / $mark.Width)
     Draw-CloudSave $graphics $cloudX $cloudY $cloudWidth $cloudHeight

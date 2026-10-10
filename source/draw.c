@@ -17,7 +17,15 @@
 
 int LoadMenuTexture(const char* path, int idx)
 {
-	int d;
+	int d, width, height;
+	if (!renderer || !menu_textures || !path || idx < 0 || idx >= TOTAL_MENU_TEXTURES)
+		return 0;
+	if (!stbi_info(path, &width, &height, &d) ||
+		width <= 0 || height <= 0 || width > 4096 || height > 4096)
+	{
+		LOG("Invalid or unavailable texture (%s)", path);
+		return 0;
+	}
 
 	LOG("Loading '%s'", path);
 	if (menu_textures[idx].texture)
@@ -31,6 +39,13 @@ int LoadMenuTexture(const char* path, int idx)
 	{
 		const char* reason = stbi_failure_reason();
 		LOG("Error loading texture (%s): %s", path, reason ? reason : "unknown error");
+		return 0;
+	}
+	if (menu_textures[idx].width != width || menu_textures[idx].height != height)
+	{
+		LOG("Invalid texture dimensions (%s)", path);
+		stbi_image_free(menu_textures[idx].buffer);
+		menu_textures[idx].buffer = NULL;
 		return 0;
 	}
 
@@ -223,6 +238,8 @@ void DrawBackgroundTexture(int x, u8 alpha)
 
 void DrawTexture(png_texture* tex, int x, int y, int z, int w, int h, u32 rgba)
 {
+	if (!renderer || !tex || !tex->texture || w <= 0 || h <= 0)
+		return;
 	SDL_Rect dest = {
 		.x = x,
 		.y = y,
@@ -280,8 +297,8 @@ static void drawOrbit(int x, int y, int radius)
 
 static void drawCardIcon(int index, int x, int y, int active, uint8_t alpha)
 {
-	SDL_SetRenderDrawColor(renderer, active ? 246 : 142, active ? 211 : 155,
-		active ? 92 : 194, alpha);
+	SDL_SetRenderDrawColor(renderer, active ? 246 : 126, active ? 211 : 142,
+		active ? 92 : 167, alpha);
 	switch (index) {
 	case 0: /* trophy star */
 		for (int i = 0; i < 8; i++) {
@@ -361,13 +378,14 @@ static void drawMainCards(uint8_t alpha)
 		int y = 440 + (i / 4) * 208;
 		int active = (menu_sel == i);
 		SDL_Rect card = {x, y, 380, 180};
-		SDL_SetRenderDrawColor(renderer, active ? 24 : 12,
-			active ? 29 : 19, active ? 68 : 38,
+		SDL_SetRenderDrawColor(renderer, active ? 28 : 12,
+			active ? 34 : 19, active ? 70 : 38,
 			active ? alpha * 235 / 255 : alpha * 220 / 255);
 		SDL_RenderFillRect(renderer, &card);
-		SDL_SetRenderDrawColor(renderer, active ? 246 : 115,
-			active ? 211 : 126, active ? 92 : 165, alpha);
-		SDL_RenderDrawRect(renderer, &card);
+		if (active) {
+			SDL_SetRenderDrawColor(renderer, 246, 211, 92, alpha);
+			SDL_RenderDrawRect(renderer, &card);
+		}
 		drawCardIcon(i, x + 56, y + 79, active, alpha);
 		SetFontColor((active ? 0xF6D35C00 : APP_FONT_COLOR) | alpha, 0);
 		SetFontSize(i == 3 ? 34 : 40, i == 3 ? 38 : 44);
@@ -385,9 +403,17 @@ static void drawMainCards(uint8_t alpha)
 
 static void drawStartupIdentity(u8 alpha)
 {
-	DrawTexture(&menu_textures[znichka_icon_png_index], 64, 56, 0,
-		76, 76, 0xFFFFFF00 | alpha);
-	if (menu_textures[cloud_save_logo_png_index].texture)
+	if (menu_textures && menu_textures[znichka_icon_png_index].texture)
+		DrawTexture(&menu_textures[znichka_icon_png_index], 64, 56, 0,
+			76, 76, 0xFFFFFF00 | alpha);
+	else
+	{
+		SetFontAlign(FONT_ALIGN_LEFT);
+		SetFontColor(APP_FONT_TITLE_COLOR | alpha, 0);
+		SetFontSize(48, 54);
+		DrawString(64, 58, "Znichka");
+	}
+	if (menu_textures && menu_textures[cloud_save_logo_png_index].texture)
 	{
 		DrawTexture(&menu_textures[cloud_save_logo_png_index],
 			(SCREEN_WIDTH - 900) / 2, (SCREEN_HEIGHT - 550) / 2, 0,

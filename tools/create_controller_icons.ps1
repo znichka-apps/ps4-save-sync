@@ -41,11 +41,11 @@ foreach ($symbol in @('cross', 'circle', 'square', 'triangle')) {
         }
     }
 
-    $small = New-Object System.Drawing.Bitmap(32, 32)
+    $small = New-Object System.Drawing.Bitmap(64, 64)
     $downsample = [System.Drawing.Graphics]::FromImage($small)
     $downsample.InterpolationMode = [System.Drawing.Drawing2D.InterpolationMode]::HighQualityBicubic
     $downsample.SmoothingMode = [System.Drawing.Drawing2D.SmoothingMode]::AntiAlias
-    $downsample.DrawImage($large, 0, 0, 32, 32)
+    $downsample.DrawImage($large, 0, 0, 64, 64)
     $small.Save((Join-Path $output "footer_ico_$symbol.png"), [System.Drawing.Imaging.ImageFormat]::Png)
 
     $downsample.Dispose()

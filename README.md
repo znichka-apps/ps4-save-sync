@@ -8,6 +8,8 @@ This is an independent project by Znichka / Andrey based on
 [Apollo Save Tool](https://github.com/bucanero/apollo-ps4/) by Bucanero.
 The original developer does not endorse this fork.
 
+Project website: [znichka.xyz](https://www.znichka.xyz/).
+
 ## Move a save between PS4s
 
 1. On the source PS4, open **Settings > Connect Google Drive** and follow the
@@ -21,15 +23,18 @@ The original developer does not endorse this fork.
      delete the existing save.
    - **Empty save slot:** press **× empty-slot restore**.
 
-Both PS4 profiles need the **same offline Account ID**. Their local user IDs
-can differ. Set the Account ID using **User Tools > Activate PS4 Accounts** in
-this app, then reboot as prompted. This does not require a separate Apollo
-download or PSN sign-in.
+Matching offline Account IDs on both PS4s can be needed for a cross-console
+restore; their local user IDs may differ. This app includes **User Tools >
+Activate PS4 Accounts** for an inactive profile. Enter the matching offline
+Account ID and reboot when prompted. The feature needs no PSN sign-in.
 
 Replace was tested successfully on PS4, and the restored save progress loaded.
 Keep the console awake until the operation finishes. Replace is not atomic, so
 keep a separate backup of the current save before using it. Backups remain in
 Google Drive; a failed restore retains its downloaded ZIP.
+If a restore fails, read the on-screen error and check
+`/data/ps4-save-sync/google_restore.log`. Keep the downloaded ZIP; if the app
+shows a pending recovery, use **R1** to retry it before another save operation.
 
 For setup, recovery behavior, and troubleshooting, see
 [Google Drive instructions](docs/google-drive.md). The same **How to use**

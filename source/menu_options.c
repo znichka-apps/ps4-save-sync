@@ -76,34 +76,33 @@ static void google_draw_help(void)
         APP_FONT_TITLE_COLOR | 0xFF, 0xffffffff, 0);
     SetFontAlign(FONT_ALIGN_LEFT);
     if (google_help_page == 1) {
-        google_help_line(205, "ACCOUNT SETUP (BOTH PS4S)", 1);
-        google_help_line(285, "Both PS4 profiles must use the same offline Account ID.", 0);
-        google_help_line(355, "Their local PS4 user IDs can be different.", 0);
-        google_help_line(425, "In this app, on each PS4: User Tools > Activate PS4 Accounts.", 0);
-        google_help_line(495, "Enter the same offline Account ID for the profile you use.", 0);
-        google_help_line(565, "Reboot each PS4 when prompted.", 0);
-        google_help_line(635, "Offline PS4 account activation is built into", 0);
-        google_help_line(705, "PS4 Cloud Save by Znichka.", 0);
-        google_help_line(775, "No separate Apollo download or PSN sign-in is needed.", 0);
-        google_help_line(845, "Chiaki can still use the activated profile.", 0);
+        google_help_line(205, "ACCOUNT IDS FOR CROSS-CONSOLE RESTORE", 1);
+        google_help_line(285, "Matching offline Account IDs on both PS4s can be needed.", 0);
+        google_help_line(355, "About shows the current profile's Account ID.", 0);
+        google_help_line(425, "This app: User Tools > Activate PS4 Accounts.", 0);
+        google_help_line(495, "Select an inactive profile and enter the matching ID.", 0);
+        google_help_line(565, "Use the same 16-digit hex Account ID on both PS4s.", 0);
+        google_help_line(635, "Reboot when prompted, then reopen this app.", 0);
+        google_help_line(705, "Local PS4 user IDs may differ.", 0);
+        google_help_line(775, "This in-app feature needs no PSN sign-in.", 0);
     } else if (google_help_page == 2) {
         google_help_line(205, "BACK UP AND RESTORE", 1);
-        google_help_line(285, "1. Settings > Connect Google Drive. Follow the URL and code.", 0);
+        google_help_line(285, "1. Both PS4s: Settings > Connect Google Drive; use URL/code.", 0);
         google_help_line(360, "2. HDD Saves > select a save > Back up to Google Drive.", 0);
-        google_help_line(435, "3. Open Google Drive on the main screen. Choose a backup.", 0);
-        google_help_action(510, "4.", footer_ico_cross_png_index, "Download; checksum, ZIP and SFO are checked.");
-        google_help_action(585, "5. Save exists?", footer_ico_triangle_png_index, "Replace. Do not delete it first.");
-        google_help_action(690, "6. Empty slot?", footer_ico_cross_png_index, "Restore the downloaded save.");
-        google_help_line(765, "Backups stay in Drive; failed restores retain downloaded ZIPs.", 0);
+        google_help_line(435, "3. Open Google Drive and select the backup.", 0);
+        google_help_action(510, "4.", footer_ico_cross_png_index, "Download and verify the backup.");
+        google_help_action(585, "5. Empty slot?", footer_ico_cross_png_index, "Restore the downloaded save.");
+        google_help_action(660, "6. Save exists?", footer_ico_triangle_png_index, "Replace; do not delete it first.");
+        google_help_line(745, "Backups stay in Drive. A failed restore retains its ZIP.", 0);
     } else {
         google_help_line(205, "REPLACE AND RECOVERY", 1);
-        google_help_action(285, "", footer_ico_triangle_png_index, "Replace an existing save after downloading.");
-        google_help_line(360, "Keep a separate backup of the target save first.", 0);
-        google_help_line(435, "Replace uploads a verified rollback before removing the target.", 0);
-        google_help_line(510, "Keep the console awake until the operation finishes.", 0);
-        google_help_line(585, "Power loss can leave a missing or partial save.", 0);
-        google_help_line(660, "Recovery is best effort; keep the downloaded ZIP.", 0);
-        google_help_action(735, "", footer_ico_circle_png_index, "Discard a ready download or return to the menu.");
+        google_help_line(285, "Before Replace, keep a separate backup of the target.", 0);
+        google_help_line(360, "Replace verifies a rollback before removing the target.", 0);
+        google_help_line(435, "Keep the console awake until Replace finishes.", 0);
+        google_help_line(510, "After a failed restore, read the error and keep the ZIP.", 0);
+        google_help_line(585, "If recovery is pending, press R1 to retry recovery.", 0);
+        google_help_line(660, "Recovery is best effort; the target may be partial.", 0);
+        google_help_action(735, "", footer_ico_circle_png_index, "Discard a ready download or return.");
         google_help_line(810, "Log: /data/ps4-save-sync/google_restore.log", 0);
     }
     SetFontSize(37, 43);
@@ -305,7 +304,7 @@ static void _draw_OptionsMenu(u8 alpha)
 				break;
 
 			case APP_OPTION_CALL:
-				DrawTexture(&menu_textures[orbisPadGetConf()->crossButtonOK ? footer_ico_cross_png_index : footer_ico_circle_png_index], OPTION_ITEM_OFF - 29, y_off+2, 0, menu_textures[footer_ico_cross_png_index].width, menu_textures[footer_ico_cross_png_index].height, 0xFFFFFF00 | alpha);
+				DrawTexture(&menu_textures[orbisPadGetConf()->crossButtonOK ? footer_ico_cross_png_index : footer_ico_circle_png_index], OPTION_ITEM_OFF - 29, y_off+2, 0, 32, 32, 0xFFFFFF00 | alpha);
 				break;
 
 			case APP_OPTION_LIST:

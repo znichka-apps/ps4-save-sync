@@ -66,33 +66,41 @@ static void _setIdValues()
 
 static void _draw_AboutMenu(u8 alpha)
 {
+	SDL_SetRenderDrawBlendMode(renderer, SDL_BLENDMODE_BLEND);
+	SDL_SetRenderDrawColor(renderer, 8, 18, 42, alpha * 220 / 255);
+	SDL_Rect panel = {170, 245, 1580, 715};
+	SDL_RenderFillRect(renderer, &panel);
 	DrawTextureCenteredX(&menu_textures[znichka_logo_png_index], SCREEN_WIDTH/2, 125, 0,
-		390, 121, 0xFFFFFF00 | alpha);
+		340, 105, 0xFFFFFF00 | alpha);
 	SetFontAlign(FONT_ALIGN_SCREEN_CENTER);
 	SetFontColor(APP_FONT_TITLE_COLOR | alpha, 0);
-	SetFontSize(61, 66);
-	DrawString(0, 255, "PS4 Cloud Save by Znichka");
-	SetFontColor(APP_FONT_COLOR | alpha, 0);
-	SetFontSize(42, 48);
-	DrawString(0, 348, "Znichka / Andrey - project and cloud-save integration");
-	DrawString(0, 410, "Based on Apollo Save Tool by Bucanero");
-	DrawString(0, 472, "Independent fork; Apollo's author does not endorse this project.");
-	DrawString(0, 534, "GPLv3 or later; see LICENSE and README for original notices.");
-	SetFontColor(APP_FONT_TITLE_COLOR | alpha, 0);
-	SetFontSize(46, 52);
-	DrawString(0, 645, _("Console details:"));
+	SetFontSize(57, 63);
+	DrawString(0, 278, "PS4 Cloud Save by Znichka");
 	SetFontColor(APP_FONT_COLOR | alpha, 0);
 	SetFontSize(40, 46);
+	DrawString(0, 365, "Andrey / Znichka - project and cloud-save integration");
+	DrawString(0, 425, "Based on Apollo Save Tool by Bucanero (Damian Parrino)");
+	SetFontColor(APP_FONT_TITLE_COLOR | alpha, 0);
+	SetFontSize(42, 48);
+	DrawString(0, 495, "https://www.znichka.xyz/");
+	SetFontColor(APP_FONT_COLOR | alpha, 0);
+	SetFontSize(36, 42);
+	DrawString(0, 560, "Independent fork - see LICENSE and README for original credits.");
+	SetFontColor(APP_FONT_TITLE_COLOR | alpha, 0);
+	SetFontSize(43, 49);
+	DrawString(0, 658, _("Console details:"));
+	SetFontColor(APP_FONT_COLOR | alpha, 0);
+	SetFontSize(36, 42);
 	for (int cnt = 0; menu_about_strings_project[cnt] != NULL; cnt += 2) {
-		int y = 720 + cnt * 52;
+		int y = 735 + (cnt / 2) * 60;
 		SetFontAlign(FONT_ALIGN_RIGHT);
-		DrawString((SCREEN_WIDTH / 2) - 20, y, menu_about_strings_project[cnt]);
+		DrawString((SCREEN_WIDTH / 2) - 28, y, menu_about_strings_project[cnt]);
 		SetFontAlign(FONT_ALIGN_LEFT);
-		DrawString((SCREEN_WIDTH / 2) + 20, y, menu_about_strings_project[cnt + 1]);
+		DrawString((SCREEN_WIDTH / 2) + 28, y, menu_about_strings_project[cnt + 1]);
 	}
 	SetFontAlign(FONT_ALIGN_SCREEN_CENTER);
-	SetFontSize(38, 44);
-	DrawString(0, 988, "in memory of Leon & Luna");
+	SetFontSize(34, 40);
+	DrawString(0, 990, "in memory of Leon & Luna");
 	SetFontAlign(FONT_ALIGN_LEFT);
 }
 

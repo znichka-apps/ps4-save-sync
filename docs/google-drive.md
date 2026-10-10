@@ -12,7 +12,7 @@ credits and licenses remain in place.
 
 ## How to use in the current UI
 
-Open **Google Drive** from the main screen and press **□** for the two-page
+Open **Google Drive** from the main screen and press **□** for the three-page
 **How to use** guide. It is also listed in Settings.
 
 1. In Settings, choose **Connect Google Drive** and complete the displayed
@@ -30,13 +30,14 @@ Open **Google Drive** from the main screen and press **□** for the two-page
 
 ## Cross-console account setup
 
-Both PS4 profiles need the **same offline Account ID** for cross-console use;
-their local user IDs may differ. If a profile needs activation, use this app's
-**User Tools > Activate PS4 Accounts**, which is included in **PS4 Cloud Save by
-Znichka**. Reboot when prompted. No separate Apollo download or PSN sign-in is
-needed. Chiaki can still use the activated account. If account-ID lookup fails,
-check `/data/ps4-save-sync/google_restore.log`, activate the local account if needed,
-reboot, and retry. Do not use a backup's account ID or zero as a substitute.
+Matching offline Account IDs on both PS4s can be needed for a cross-console
+restore; their local user IDs may differ. The current Account ID is shown on
+the About page. For an inactive profile, use this app's **User Tools > Activate
+PS4 Accounts**, enter the matching 16-digit hex Account ID, and reboot when
+prompted. The feature needs no PSN sign-in. If a restore fails, read the
+on-screen error and check `/data/ps4-save-sync/google_restore.log`; retain the
+downloaded ZIP. If recovery is pending, use **R1** to retry it before another
+save operation. Do not use a backup's account ID or zero as a substitute.
 
 ## Console test status
 
