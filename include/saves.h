@@ -2,21 +2,20 @@
 #include <dbglogger.h>
 #define LOG dbglogger_log
 
-#define APOLLO_PATH				"/data/apollo/"
-#define APOLLO_SANDBOX_PATH		"/data/apollo/mount/%s/"
+#define APOLLO_PATH				"/data/ps4-save-sync/"
+#define APOLLO_SANDBOX_PATH		"/data/ps4-save-sync/mount/%s/"
 
 #ifdef APOLLO_ENABLE_LOGGING
-#define APOLLO_APP_PATH			"/data/apollo/debug/"
-#define APOLLO_SETTING_PATH		"/mnt/sandbox/LOAD00044_000%s/"
+#define APOLLO_APP_PATH			"/data/ps4-save-sync/debug/"
+#define APOLLO_SETTING_PATH		"/mnt/sandbox/PSSY00001_000%s/"
 #else
-#define APOLLO_APP_PATH			"/mnt/sandbox/APOL00004_000/app0/assets/"
-#define APOLLO_SETTING_PATH		"/mnt/sandbox/APOL00004_000%s/"
+#define APOLLO_APP_PATH			"/mnt/sandbox/PSSY00001_000/app0/assets/"
+#define APOLLO_SETTING_PATH		"/mnt/sandbox/PSSY00001_000%s/"
 #endif
 
 #define APOLLO_USER_PATH		APOLLO_PATH "%08x/"
 #define APOLLO_DATA_PATH		APOLLO_PATH "data/"
 #define APOLLO_LOCAL_CACHE		APOLLO_PATH "cache/"
-#define APOLLO_UPDATE_URL		"https://api.github.com/repos/bucanero/apollo-ps4/releases/latest"
 
 #define MAX_USB_DEVICES         8
 #define USB0_PATH               "/mnt/usb0/"
@@ -140,6 +139,7 @@ enum cmd_code_enum
     SFO_CHANGE_ACCOUNT_ID,
     SFO_REMOVE_PSID,
     SFO_CHANGE_TITLE_ID,
+    CMD_UPLOAD_GOOGLE, /* Append to preserve existing command values. */
 };
 
 // Save flags
@@ -324,8 +324,23 @@ int regMgr_SetAccountId(int userNumber, uint64_t* psnAccountId);
 
 int get_save_details(const save_entry_t *save, char** details);
 int orbis_SaveUmount(const char* mountPath);
+int orbis_SaveUmountStatus(const char* mountPath, int *nativeStatus);
 int orbis_SaveMount(const save_entry_t *save, uint32_t mode, char* mountPath);
+int orbis_SaveTargetAbsent(const save_entry_t *save, uint32_t user);
+int orbis_SaveMountEmpty(const save_entry_t *save, uint32_t user, char* mountPath);
+int orbis_SaveMountChecked(const save_entry_t *save, uint32_t mode, char* mountPath, int *mountUncertain);
+int orbis_SaveMountEmptyChecked(const save_entry_t *save, uint32_t user, char* mountPath, int *mountUncertain);
+typedef struct {
+	const char *call;
+	int native_result;
+	int error;
+} save_mount_diagnostic_t;
+int orbis_SaveMountEmptyCheckedDiagnostic(const save_entry_t *save, uint32_t user, char* mountPath,
+	int *mountUncertain, save_mount_diagnostic_t *diagnostic);
+int orbis_ImportStagedSave(const char *stage, const char *title, const char *directory, uint32_t user,
+	int (*cancelled)(void*), void *data, int *mountBlocked, uint32_t replaceTraceUser);
 int orbis_SaveDelete(const save_entry_t *save);
+int orbis_SaveDeleteStatus(const save_entry_t *save, int *sdk_status);
 int orbis_UpdateSaveParams(const save_entry_t* save, const char* title, const char* subtitle, const char* details, uint32_t up);
 
 int trophy_lock(const save_entry_t* game, int trp_id, int grp_id, int type);

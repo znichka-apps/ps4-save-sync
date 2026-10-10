@@ -1,5 +1,7 @@
 #include <apollo.h>
 #include <mbedtls/md.h>
+#include <unistd.h>
+#include <errno.h>
 #include "sfo.h"
 #include "util.h"
 
@@ -288,8 +290,13 @@ int sfo_write(sfo_context_t *context, const char *file_path) {
 		memcpy(sfo + header->data_table_offset + index_table->data_offset, param->value, param->actual_length);
 	}
 
-	if ((ret = write_buffer(file_path, sfo, sfo_size)) < 0)
-		goto error;
+	/* Ownership patches must detect short writes, flush, sync and close errors. */
+	FILE *output = fopen(file_path, "wb");
+	if (!output) ret = -1;
+	else {
+		if (fwrite(sfo, 1, sfo_size, output) != sfo_size || fflush(output) || fsync(fileno(output))) ret = -1;
+		if (fclose(output)) ret = -1;
+	}
 
 	free(sfo);
 
@@ -434,8 +441,10 @@ int patch_sfo(const char *in_file_path, sfo_patch_t* patches) {
 
 	sfo = sfo_alloc();
 	if (sfo_read(sfo, in_file_path) < 0) {
+		int error = errno;
 		sfo_free(sfo);
 		LOG("Unable to read from '%s'", in_file_path);
+		errno = error;
 		return -1;
 	}
 
@@ -446,8 +455,10 @@ int patch_sfo(const char *in_file_path, sfo_patch_t* patches) {
 //	sfo_patch_directory(sfo, patches->directory);
 
 	if (sfo_write(sfo, in_file_path) < 0) {
+		int error = errno;
 		LOG("Unable to write to '%s'", in_file_path);
 		sfo_free(sfo);
+		errno = error;
 		return -1;
 	}
 

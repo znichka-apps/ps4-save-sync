@@ -18,14 +18,6 @@ static char user_id_str[9] = "00000000";
 static char psid_str[] = "0000000000000000 0000000000000000";
 static char account_id_str[] = "0000000000000000";
 
-const char * menu_about_strings[] = { "Bucanero", "Developer",
-									"", "",
-									"PS3", "credits",
-									"Berion", "GUI design",
-									"Dnawrkshp", "Artemis code",
-									"aldostools", "Bruteforce Save Data",
-									NULL };
-
 const char * menu_about_strings_project[] = { "User ID", user_id_str,
 											"Account ID", account_id_str,
 											"Console PSID", psid_str,
@@ -74,50 +66,41 @@ static void _setIdValues()
 
 static void _draw_AboutMenu(u8 alpha)
 {
-	int cnt = 0;
-	u8 alp2 = ((alpha*2) > 0xFF) ? 0xFF : (alpha * 2); 
-    
-    //------------- About Menu Contents
-	DrawTextureCenteredX(&menu_textures[logo_text_png_index], SCREEN_WIDTH/2, 110, 0, menu_textures[logo_text_png_index].width * 3/2, menu_textures[logo_text_png_index].height * 3/2, 0xFFFFFF00 | alp2);
-
-    SetFontAlign(FONT_ALIGN_SCREEN_CENTER);
-	SetCurrentFont(font_adonais_regular);
-	SetFontColor(APP_FONT_MENU_COLOR | alpha, 0);
-	SetFontSize(APP_FONT_SIZE_JARS);
-	DrawStringMono(0, 220, "PlayStation 4 version");
-    
-    for (cnt = 0; menu_about_strings[cnt] != NULL; cnt += 2)
-    {
-        SetFontAlign(FONT_ALIGN_RIGHT);
-		DrawStringMono((SCREEN_WIDTH / 2) - 20, 280 + (cnt * 20), menu_about_strings[cnt]);
-        
-		SetFontAlign(FONT_ALIGN_LEFT);
-		DrawStringMono((SCREEN_WIDTH / 2) + 20, 280 + (cnt * 20), menu_about_strings[cnt + 1]);
-    }
-
-	DrawTexture(&menu_textures[help_png_index], help_png_x, 300 + (cnt * 22), 0, help_png_w, 220, 0xFFFFFF00 | alp2);
-
+	SDL_SetRenderDrawBlendMode(renderer, SDL_BLENDMODE_BLEND);
+	SDL_SetRenderDrawColor(renderer, 8, 18, 42, alpha * 220 / 255);
+	SDL_Rect panel = {170, 245, 1580, 715};
+	SDL_RenderFillRect(renderer, &panel);
+	DrawTextureCenteredX(&menu_textures[znichka_logo_png_index], SCREEN_WIDTH/2, 125, 0,
+		340, 105, 0xFFFFFF00 | alpha);
 	SetFontAlign(FONT_ALIGN_SCREEN_CENTER);
+	SetFontColor(APP_FONT_TITLE_COLOR | alpha, 0);
+	SetFontSize(57, 63);
+	DrawString(0, 278, "PS4 Cloud Save by Znichka");
 	SetFontColor(APP_FONT_COLOR | alpha, 0);
-	SetFontSize(APP_FONT_SIZE_DESCRIPTION);
-	DrawString(0, 250 + ((cnt + 3) * 22), _("Console details:"));
-	SetFontSize(APP_FONT_SIZE_SELECTION);
-
-	int off = cnt + 5;
-	for (cnt = 0; menu_about_strings_project[cnt] != NULL; cnt += 2)
-	{
+	SetFontSize(40, 46);
+	DrawString(0, 365, "Andrey / Znichka - project and cloud-save integration");
+	DrawString(0, 425, "Based on Apollo Save Tool by Bucanero (Damian Parrino)");
+	SetFontColor(APP_FONT_TITLE_COLOR | alpha, 0);
+	SetFontSize(42, 48);
+	DrawString(0, 495, "https://www.znichka.xyz/");
+	SetFontColor(APP_FONT_COLOR | alpha, 0);
+	SetFontSize(36, 42);
+	DrawString(0, 560, "Independent fork - see LICENSE and README for original credits.");
+	SetFontColor(APP_FONT_TITLE_COLOR | alpha, 0);
+	SetFontSize(43, 49);
+	DrawString(0, 658, _("Console details:"));
+	SetFontColor(APP_FONT_COLOR | alpha, 0);
+	SetFontSize(36, 42);
+	for (int cnt = 0; menu_about_strings_project[cnt] != NULL; cnt += 2) {
+		int y = 735 + (cnt / 2) * 60;
 		SetFontAlign(FONT_ALIGN_RIGHT);
-		DrawString((SCREEN_WIDTH / 2) - 10, 250 + ((cnt + off) * 22), menu_about_strings_project[cnt]);
-
+		DrawString((SCREEN_WIDTH / 2) - 28, y, menu_about_strings_project[cnt]);
 		SetFontAlign(FONT_ALIGN_LEFT);
-		DrawString((SCREEN_WIDTH / 2) + 10, 250 + ((off + cnt) * 22), menu_about_strings_project[cnt + 1]);
+		DrawString((SCREEN_WIDTH / 2) + 28, y, menu_about_strings_project[cnt + 1]);
 	}
-
 	SetFontAlign(FONT_ALIGN_SCREEN_CENTER);
-	SetCurrentFont(font_adonais_regular);
-	SetFontColor(APP_FONT_MENU_COLOR | alp2, 0);
-	SetFontSize(APP_FONT_SIZE_JARS);
-	DrawStringMono(0, 890, "in memory of Leon & Luna");
+	SetFontSize(34, 40);
+	DrawString(0, 990, "in memory of Leon & Luna");
 	SetFontAlign(FONT_ALIGN_LEFT);
 }
 
@@ -137,7 +120,7 @@ void Draw_AboutMenu_Ani(void)
 	for (int ani = 0; ani < MENU_ANI_MAX; ani++)
 	{
 		SDL_RenderClear(renderer);
-		DrawBackground2D(0xFFFFFFFF);
+		DrawBackground2D(0x070A12FF);
 
 		DrawHeader_Ani(cat_about_png_index, _("About"), "v" APOLLO_VERSION, APP_FONT_TITLE_COLOR, 0xffffffff, ani, 12);
 

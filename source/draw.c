@@ -2,6 +2,7 @@
 #include <threads.h>
 #include <unistd.h>
 #include <stdio.h>
+#include <math.h>
 
 #define STBI_ASSERT(x)
 #define STB_IMAGE_IMPLEMENTATION
@@ -14,12 +15,17 @@
 #include <dbglogger.h>
 #define LOG dbglogger_log
 
-#define JAR_COLUMNS 7
-
-
 int LoadMenuTexture(const char* path, int idx)
 {
-	int d;
+	int d, width, height;
+	if (!renderer || !menu_textures || !path || idx < 0 || idx >= TOTAL_MENU_TEXTURES)
+		return 0;
+	if (!stbi_info(path, &width, &height, &d) ||
+		width <= 0 || height <= 0 || width > 4096 || height > 4096)
+	{
+		LOG("Invalid or unavailable texture (%s)", path);
+		return 0;
+	}
 
 	LOG("Loading '%s'", path);
 	if (menu_textures[idx].texture)
@@ -31,7 +37,15 @@ int LoadMenuTexture(const char* path, int idx)
 
 	if (!menu_textures[idx].buffer)
 	{
-		LOG("Error Loading texture (%s)!", path);
+		const char* reason = stbi_failure_reason();
+		LOG("Error loading texture (%s): %s", path, reason ? reason : "unknown error");
+		return 0;
+	}
+	if (menu_textures[idx].width != width || menu_textures[idx].height != height)
+	{
+		LOG("Invalid texture dimensions (%s)", path);
+		stbi_image_free(menu_textures[idx].buffer);
+		menu_textures[idx].buffer = NULL;
 		return 0;
 	}
 
@@ -41,14 +55,19 @@ int LoadMenuTexture(const char* path, int idx)
 
 	SDL_Surface* surface = SDL_CreateRGBSurfaceFrom(menu_textures[idx].buffer, menu_textures[idx].width, menu_textures[idx].height, 32, 4 * menu_textures[idx].width,
 												0xFF000000, 0x00FF0000, 0x0000FF00, 0x000000FF);
-
-	menu_textures[idx].texture = SDL_CreateTextureFromSurface(renderer, surface);
-
-	SDL_FreeSurface(surface);
+	if (surface)
+	{
+		menu_textures[idx].texture = SDL_CreateTextureFromSurface(renderer, surface);
+		SDL_FreeSurface(surface);
+	}
 	stbi_image_free(menu_textures[idx].buffer);
-
-	menu_textures[idx].size = menu_textures[idx].width * menu_textures[idx].height * 4;
 	menu_textures[idx].buffer = NULL;
+	if (!menu_textures[idx].texture)
+	{
+		LOG("Error creating texture (%s): %s", path, SDL_GetError());
+		return 0;
+	}
+	menu_textures[idx].size = menu_textures[idx].width * menu_textures[idx].height * 4;
 	return 1;
 }
 
@@ -137,7 +156,7 @@ void DrawHeader_Ani(int icon, const char * hdrTitle, const char * headerSubTitle
 */
 
 	//header mini icon
-	DrawTextureCenteredX(&menu_textures[icon], MENU_ICON_OFF - 20, 32, 0, 96, 96, 0xffffff00 | icon_a);
+	DrawTextureCenteredX(&menu_textures[znichka_icon_png_index], MENU_ICON_OFF - 20, 32, 0, 96, 96, 0xffffff00 | icon_a);
 
 	//header title string
 	SetFontColor(rgba | icon_a, 0);
@@ -184,13 +203,13 @@ void DrawHeader(int icon, int xOff, const char * hdrTitle, const char * headerSu
 	SetFontColor(rgba, 0);
 	if (mode)
 	{
-		DrawTextureCenteredX(&menu_textures[icon], xOff + MENU_ICON_OFF - 12, 40, 0, 64, 64, 0xffffffff);
+		DrawTextureCenteredX(&menu_textures[znichka_icon_png_index], xOff + MENU_ICON_OFF - 12, 40, 0, 64, 64, 0xffffffff);
 		SetFontSize(APP_FONT_SIZE_SUBTITLE);
 		DrawString(xOff + MENU_ICON_OFF + 40, 35, headerTitle);
 	}
 	else
 	{
-		DrawTextureCenteredX(&menu_textures[icon], xOff + MENU_ICON_OFF - 20, 32, 0, 96, 96, 0xffffffff);
+		DrawTextureCenteredX(&menu_textures[znichka_icon_png_index], xOff + MENU_ICON_OFF - 20, 32, 0, 96, 96, 0xffffffff);
 		SetFontSize(APP_FONT_SIZE_TITLE);
 		DrawString(xOff + MENU_ICON_OFF + 40, 31, headerTitle);
 	}
@@ -219,6 +238,8 @@ void DrawBackgroundTexture(int x, u8 alpha)
 
 void DrawTexture(png_texture* tex, int x, int y, int z, int w, int h, u32 rgba)
 {
+	if (!renderer || !tex || !tex->texture || w <= 0 || h <= 0)
+		return;
 	SDL_Rect dest = {
 		.x = x,
 		.y = y,
@@ -264,150 +285,137 @@ void DrawTextureRotated(png_texture* tex, int x, int y, int z, int w, int h, u32
 	SDL_RenderCopyEx(renderer, tex->texture, NULL, &dest, angle, NULL, SDL_FLIP_NONE);
 }
 
-static void drawJar(uint8_t idx, int pos_x, int pos_y, const char* text, uint8_t alpha)
+static void drawOrbit(int x, int y, int radius)
 {
-	uint8_t active = (menu_sel + jar_trophy_png_index == idx);
-	DrawTexture(&menu_textures[idx], pos_x, pos_y, 0, menu_textures[idx].width, menu_textures[idx].height, 0xffffff00 | alpha);
-
-	//Selected
-	if (active)
-		DrawTexture(&menu_textures[idx + JAR_COLUMNS], pos_x, pos_y, 0, menu_textures[idx + JAR_COLUMNS].width, menu_textures[idx + JAR_COLUMNS].height, 0xffffff00 | alpha);
-
-	SetFontColor(APP_FONT_MENU_COLOR | (alpha == 0xFF ? (active ? 0xFF : 0x20) : alpha), 0);
-	DrawStringMono(pos_x + (menu_textures[idx].width / 2), pos_y - 50, text);
+	for (int i = 0; i < 32; i++) {
+		float a = (float)i * 6.2831853f / 32.0f;
+		float b = (float)(i + 1) * 6.2831853f / 32.0f;
+		SDL_RenderDrawLine(renderer, x + (int)(cosf(a) * radius), y + (int)(sinf(a) * radius),
+			x + (int)(cosf(b) * radius), y + (int)(sinf(b) * radius));
+	}
 }
 
-static void _drawColumn(uint8_t idx, int pos_x, int pos_y, uint8_t alpha)
+static void drawCardIcon(int index, int x, int y, int active, uint8_t alpha)
 {
-	DrawTexture(&menu_textures[idx], pos_x, pos_y, 0, menu_textures[idx].width, menu_textures[idx].height, 0xffffff00 | alpha);
+	SDL_SetRenderDrawColor(renderer, active ? 246 : 126, active ? 211 : 142,
+		active ? 92 : 167, alpha);
+	switch (index) {
+	case 0: /* trophy star */
+		for (int i = 0; i < 8; i++) {
+			float a = (float)i * 6.2831853f / 8.0f;
+			SDL_RenderDrawLine(renderer, x, y, x + (int)(cosf(a) * 35), y + (int)(sinf(a) * 35));
+		}
+		drawOrbit(x, y, 8);
+		break;
+	case 1: /* USB branch */
+		SDL_RenderDrawLine(renderer, x, y + 32, x, y - 31);
+		SDL_RenderDrawLine(renderer, x, y - 11, x - 27, y - 11);
+		SDL_RenderDrawLine(renderer, x, y + 8, x + 27, y + 8);
+		SDL_RenderDrawLine(renderer, x, y - 31, x - 7, y - 23);
+		SDL_RenderDrawLine(renderer, x, y - 31, x + 7, y - 23);
+		SDL_Rect usb = {x - 31, y - 15, 8, 8}; SDL_RenderFillRect(renderer, &usb);
+		usb.x = x + 23; usb.y = y + 4; SDL_RenderFillRect(renderer, &usb);
+		break;
+	case 2: /* drive bays */
+		for (int i = 0; i < 2; i++) {
+			SDL_Rect bay = {x - 35, y - 25 + i * 32, 70, 24};
+			SDL_RenderDrawRect(renderer, &bay);
+			SDL_Rect light = {x + 20, y - 16 + i * 32, 5, 5}; SDL_RenderFillRect(renderer, &light);
+		}
+		break;
+	case 3: /* online database */
+		drawOrbit(x, y, 28); drawOrbit(x, y, 8);
+		SDL_RenderDrawLine(renderer, x - 35, y, x + 35, y);
+		SDL_RenderDrawLine(renderer, x, y - 35, x, y + 35);
+		break;
+	case 4: /* cloud and save arrow */
+		for (int i = 0; i < 12; i++) {
+			float a = 3.1415927f + (float)i * 3.1415927f / 11.0f;
+			float b = 3.1415927f + (float)(i + 1) * 3.1415927f / 11.0f;
+			SDL_RenderDrawLine(renderer, x - 18 + (int)(cosf(a) * 17), y + 9 + (int)(sinf(a) * 17),
+				x - 18 + (int)(cosf(b) * 17), y + 9 + (int)(sinf(b) * 17));
+			SDL_RenderDrawLine(renderer, x + 8 + (int)(cosf(a) * 27), y + 1 + (int)(sinf(a) * 27),
+				x + 8 + (int)(cosf(b) * 27), y + 1 + (int)(sinf(b) * 27));
+		}
+		SDL_RenderDrawLine(renderer, x - 35, y + 9, x - 35, y + 24);
+		SDL_RenderDrawLine(renderer, x - 35, y + 24, x + 35, y + 24);
+		SDL_RenderDrawLine(renderer, x + 35, y + 1, x + 35, y + 24);
+		SDL_RenderDrawLine(renderer, x, y - 12, x, y + 9);
+		SDL_RenderDrawLine(renderer, x - 10, y, x, y + 10);
+		SDL_RenderDrawLine(renderer, x + 10, y, x, y + 10);
+		break;
+	case 5: /* tools */
+		drawOrbit(x, y, 25);
+		SDL_RenderDrawLine(renderer, x - 35, y, x + 35, y);
+		SDL_RenderDrawLine(renderer, x, y - 35, x, y + 35);
+		drawOrbit(x, y, 8);
+		break;
+	case 6: /* settings sliders */
+		for (int i = 0; i < 3; i++) {
+			int yy = y - 25 + i * 25;
+			SDL_RenderDrawLine(renderer, x - 34, yy, x + 34, yy);
+			SDL_Rect knob = {x - 19 + i * 15, yy - 6, 12, 12}; SDL_RenderFillRect(renderer, &knob);
+		}
+		break;
+	default: /* about */
+		drawOrbit(x, y, 33);
+		SDL_Rect dot = {x - 3, y - 19, 6, 6}; SDL_RenderFillRect(renderer, &dot);
+		SDL_RenderDrawLine(renderer, x, y - 5, x, y + 20);
+		break;
+	}
 }
 
-static void drawColumns(uint8_t alpha)
+static void drawMainCards(uint8_t alpha)
 {
-//	DrawTexture(&menu_textures[bg_water_png_index], bg_water_png_x - apollo_config.marginH, apollo_config.marginV + bg_water_png_y, 0, bg_water_png_w + (apollo_config.marginH * 2), bg_water_png_h, 0xffffff00 | 0xFF);
-
-	//Columns
-	_drawColumn(column_1_png_index, column_1_png_x, column_1_png_y, alpha);
-	_drawColumn(column_2_png_index, column_2_png_x, column_2_png_y, alpha);
-	_drawColumn(column_3_png_index, column_3_png_x, column_3_png_y, alpha);
-	_drawColumn(column_4_png_index, column_4_png_x, column_4_png_y, alpha);
-	_drawColumn(column_5_png_index, column_5_png_x, column_5_png_y, alpha);
-	_drawColumn(column_6_png_index, column_6_png_x, column_6_png_y, alpha);
-	_drawColumn(column_7_png_index, column_7_png_x, column_7_png_y, alpha);
-}
-
-static void drawJars(uint8_t alpha)
-{
-	SetFontAlign(FONT_ALIGN_CENTER);
-	SetFontSize(APP_FONT_SIZE_JARS);
-	SetCurrentFont(font_adonais_regular);
-
-	//Trophies
-	drawJar(jar_trophy_png_index, jar_empty_png_x, jar_empty_png_y, (alpha == 0xFF ? "Trophies" : ""), alpha);
-
-	//USB save
-	drawJar(jar_usb_png_index, jar_usb_png_x, jar_usb_png_y, (alpha == 0xFF ? "USB Saves" : ""), alpha);
-	
-	//HDD save
-	drawJar(jar_hdd_png_index, jar_hdd_png_x, jar_hdd_png_y, (alpha == 0xFF ? "HDD Saves" : ""), alpha);
-
-	//Online cheats
-	drawJar(jar_db_png_index, jar_db_png_x, jar_db_png_y, (alpha == 0xFF ? (apollo_config.online_opt ? "FTP Server" : "Online DB") : ""), alpha);
-	
-	//User Backup
-	drawJar(jar_bup_png_index, jar_bup_png_x, jar_bup_png_y, (alpha == 0xFF ? "User Tools" : ""), alpha);
-
-	//Options
-	drawJar(jar_opt_png_index, jar_opt_png_x, jar_opt_png_y, (alpha == 0xFF ? "Settings" : ""), alpha);
-	
-	//About
-	drawJar(jar_about_png_index, jar_about_png_x, jar_about_png_y, (alpha == 0xFF ? "About" : ""), alpha);
-
+	static const char *labels[8] = {"Trophies", "USB Saves", "HDD Saves", "Online Database",
+		"Google Drive", "User Tools", "Settings", "About"};
+	static const char *details[8] = {"Trophy saves", "USB storage", "Internal storage", "Browse online saves",
+		"Cloud backup / restore", "Local save tools", "App preferences", "App information"};
 	SetFontAlign(FONT_ALIGN_LEFT);
-}
-
-void drawSplashLogo(int mode)
-{
-	int ani, max;
-
-	if (mode > 0)
-	{
-		ani = 0;
-		max = MENU_ANI_MAX;
+	SDL_SetRenderDrawBlendMode(renderer, SDL_BLENDMODE_BLEND);
+	for (int i = 0; i < 8; i++) {
+		int x = 144 + (i % 4) * 413;
+		int y = 440 + (i / 4) * 208;
+		int active = (menu_sel == i);
+		SDL_Rect card = {x, y, 380, 180};
+		SDL_SetRenderDrawColor(renderer, active ? 28 : 12,
+			active ? 34 : 19, active ? 70 : 38,
+			active ? alpha * 235 / 255 : alpha * 220 / 255);
+		SDL_RenderFillRect(renderer, &card);
+		if (active) {
+			SDL_SetRenderDrawColor(renderer, 246, 211, 92, alpha);
+			SDL_RenderDrawRect(renderer, &card);
+		}
+		drawCardIcon(i, x + 56, y + 79, active, alpha);
+		SetFontColor((active ? 0xF6D35C00 : APP_FONT_COLOR) | alpha, 0);
+		SetFontSize(i == 3 ? 34 : 40, i == 3 ? 38 : 44);
+		DrawString(x + 111, y + 50, i == 3 && apollo_config.online_opt ? "FTP Server" : labels[i]);
+		SetFontColor(0xC8D5ED00 | alpha, 0);
+		SetFontSize(30, 34);
+		DrawString(x + 24, y + 132, details[i]);
 	}
-	else
-	{
-		ani = MENU_ANI_MAX;
-		max = 0;
-	}
-
-	for (; ani != max; ani += mode)
-	{
-		// clear the current display buffer
-		SDL_RenderClear(renderer);
-		DrawBackground2D(0x000000FF);
-		
-		//------------ Backgrounds
-		int logo_a_t = ((ani < 0x20) ? 0 : ((ani - 0x20)*3));
-		if (logo_a_t > 0xFF)
-			logo_a_t = 0xFF;
-		u8 logo_a = (u8)logo_a_t;
-
-		SDL_SetTextureAlphaMod(menu_textures[buk_scr_png_index].texture, logo_a);
-
-		//App description
-		DrawTextureCentered(&menu_textures[buk_scr_png_index], SCREEN_WIDTH/2, SCREEN_HEIGHT /2, 0, menu_textures[buk_scr_png_index].width, menu_textures[buk_scr_png_index].height, 0xFFFFFF00 | logo_a);
-
-		//flush and flip
-		SDL_RenderPresent(renderer);
-	}
-}
-
-void drawEndLogo(void)
-{
-	SDL_Rect rect = {
-		.x = 0,
-		.w = SCREEN_WIDTH,
-	};
-
-	for (rect.h = 0; rect.h <= SCREEN_HEIGHT/2; rect.h += 3)
-	{
-		// clear the current display buffer
-		SDL_RenderClear(renderer);
-		DrawBackground2D(0xFFFFFFFF);
-
-		//App description
-		DrawTextureCentered(&menu_textures[logo_png_index], SCREEN_WIDTH/2, SCREEN_HEIGHT /2, 0, menu_textures[logo_png_index].width *3/4, menu_textures[logo_png_index].height *3/4, 0xFFFFFF00 | 0xFF);
-
-		rect.y = 0;
-		SDL_SetRenderDrawColor(renderer, 0, 0, 0, 0xFF);
-		SDL_RenderFillRect(renderer, &rect);
-
-		rect.y = SCREEN_HEIGHT - rect.h;
-		SDL_RenderFillRect(renderer, &rect);
-
-		//flush and flip
-		SDL_RenderPresent(renderer);
-	}
+	SetFontAlign(FONT_ALIGN_SCREEN_CENTER);
+	SetFontColor(APP_FONT_COLOR | alpha, 0);
+	SetFontSize(36, 40);
+	DrawString(0, 921, "Left / Right  Navigate       \x10 Open       \x13 Exit");
+	SetFontAlign(FONT_ALIGN_LEFT);
 }
 
 static void _draw_MainMenu(uint8_t alpha)
 {
-	//------------ Backgrounds
-
-	//Background
 	DrawBackgroundTexture(0, 0xFF);
-	
-	//App logo
-	DrawTexture(&menu_textures[logo_png_index], logo_png_x, logo_png_y, 0, logo_png_w, logo_png_h, 0xFFFFFFFF);
-	
-	//App description
-	DrawTextureCenteredX(&menu_textures[logo_text_png_index], SCREEN_WIDTH/2, SCREEN_HEIGHT/2 - 40, 0, menu_textures[logo_text_png_index].width * 3/2, menu_textures[logo_text_png_index].height * 3/2, 0xFFFFFF00 | 0xFF);
-
-	drawColumns(alpha);
-
-	//------------ Icons
-	drawJars(alpha);
+	DrawTexture(&menu_textures[znichka_icon_png_index], 146, 82, 0,
+		104, 104, 0xFFFFFF00 | alpha);
+	SetFontAlign(FONT_ALIGN_LEFT);
+	SetFontColor(APP_FONT_TITLE_COLOR | alpha, 0);
+	SetFontSize(72, 76);
+	DrawString(276, 77, "PS4 Cloud Save");
+	SetFontColor(0xE9EEF900 | alpha, 0);
+	SetFontSize(38, 44);
+	DrawString(282, 165, "by Znichka");
+	SetFontSize(43, 48);
+	DrawString(146, 304, "Back up and restore PS4 saves with Google Drive");
+	drawMainCards(alpha);
 }
 
 void Draw_MainMenu_Ani(void)
@@ -416,7 +424,7 @@ void Draw_MainMenu_Ani(void)
 	for (ani = 0; ani < max; ani++)
 	{
 		SDL_RenderClear(renderer);
-		DrawBackground2D(0xFFFFFFFF);
+		DrawBackground2D(0x070A12FF);
 		
 		//------------ Backgrounds
 		u8 bg_a = (u8)(ani * 2);
@@ -430,11 +438,17 @@ void Draw_MainMenu_Ani(void)
 		//Background
 		DrawBackgroundTexture(0, bg_a);
 		
-		//App logo
-		DrawTexture(&menu_textures[logo_png_index], logo_png_x, logo_png_y, 0, logo_png_w, logo_png_h, 0xFFFFFF00 | logo_a);
-		
-		//App description
-		DrawTextureCenteredX(&menu_textures[logo_text_png_index], SCREEN_WIDTH/2, SCREEN_HEIGHT/2 - 40, 0, menu_textures[logo_text_png_index].width * 3/2, menu_textures[logo_text_png_index].height * 3/2, 0xFFFFFF00 | logo_a);
+		if (logo_a) {
+			DrawTexture(&menu_textures[znichka_icon_png_index], 146, 82, 0,
+				104, 104, 0xFFFFFF00 | logo_a);
+			SetFontAlign(FONT_ALIGN_LEFT);
+			SetFontColor(APP_FONT_TITLE_COLOR | logo_a, 0);
+			SetFontSize(72, 76);
+			DrawString(276, 77, "PS4 Cloud Save");
+			SetFontColor(0xE9EEF900 | logo_a, 0);
+			SetFontSize(38, 44);
+			DrawString(282, 165, "by Znichka");
+		}
 
 		SDL_RenderPresent(renderer);
 	}
@@ -444,7 +458,7 @@ void Draw_MainMenu_Ani(void)
 	for (ani = 0; ani < max; ani++)
 	{
 		SDL_RenderClear(renderer);
-		DrawBackground2D(0xFFFFFFFF);
+		DrawBackground2D(0x070A12FF);
 		
 		u8 icon_a = (u8)(((ani * rate) > 0xFF) ? 0xFF : (ani * rate));
 		

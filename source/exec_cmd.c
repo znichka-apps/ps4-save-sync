@@ -1,6 +1,8 @@
 #include <stdio.h>
 #include <string.h>
 #include <dirent.h>
+#include <errno.h>
+#include <sys/stat.h>
 #include <time.h>
 #include <orbis/NetCtl.h>
 #include <orbis/SaveData.h>
@@ -18,8 +20,27 @@
 #include "mcio.h"
 #include "ps1card.h"
 #include "svpng.h"
+#include "google_drive.h"
+#include "save_zip.h"
+#include "restore_fs.h"
+#include "google_replace.h"
+#include "import_input.h"
+#include "google_restore_log.h"
 
 static char host_buf[256];
+static int restore_import_active;
+
+/* Recovery tracing must not replace the errno from the operation being logged. */
+static void import_step(uint32_t user, const char *step, int ok, int native, int error, const char *call)
+{
+	int saved_errno = errno;
+	if (restore_import_active) google_restore_log(step,10,ok?0:error,0,native,call,!ok);
+	if (!user) { errno=saved_errno; return; }
+	char detail[80];
+	snprintf(detail, sizeof(detail), "result=%d native=%d errno=%d call=%s", ok, native, ok ? 0 : error, call);
+	google_replace_phase(user, step, detail);
+	errno = saved_errno;
+}
 
 static void _set_dest_path(char* path, int dest, const char* folder)
 {
@@ -98,6 +119,7 @@ static void zipSave(const save_entry_t* entry, const char* exp_path)
 	struct tm t = get_local_time();
 	char* tmp;
 	int ret;
+	char diagnostic[SAVE_ZIP_DIAGNOSTIC_SIZE];
 
 	if (mkdirs(exp_path) != SUCCESS)
 	{
@@ -109,11 +131,11 @@ static void zipSave(const save_entry_t* entry, const char* exp_path)
 
 	snprintf(zip_file, sizeof(zip_file), "%s%s-%s_%d-%02d-%02d_%02d%02d%02d.zip", exp_path, entry->title_id, entry->dir_name, t.tm_year+1900, t.tm_mon+1, t.tm_mday, t.tm_hour, t.tm_min, t.tm_sec);
 
-	tmp = strdup(entry->path);
-	*strrchr(tmp, '/') = 0;
-	*strrchr(tmp, '/') = 0;
-
-	ret = zip_directory(tmp, entry->path, zip_file);
+	tmp = entry->path ? strdup(entry->path) : NULL;
+	char *slash = tmp ? strrchr(tmp, '/') : NULL;
+	if (slash) { *slash = 0; slash = strrchr(tmp, '/'); }
+	if (slash) *slash = 0;
+	ret = zip_directory_diagnostic(slash ? tmp : NULL, entry->path, zip_file, NULL, NULL, diagnostic, sizeof(diagnostic));
 	free(tmp);
 
 	if (ret)
@@ -133,7 +155,7 @@ static void zipSave(const save_entry_t* entry, const char* exp_path)
 	stop_loading_screen();
 	if (!ret)
 	{
-		show_message("%s\n%s", _("Error! Can't export save game to:"), exp_path);
+		show_message("%s\n%s", _("Error! Can't export save game."), diagnostic);
 		return;
 	}
 
@@ -171,7 +193,7 @@ static void copySave(const save_entry_t* save, const char* exp_path)
 		show_message("%s\n%s", _("Error! Can't copy save game to:"), exp_path);
 }
 
-static int _update_save_details(const char* sys_path, const save_entry_t* save)
+static int _update_save_details(const char* sys_path, const save_entry_t* save, uint32_t trace_user)
 {
 	char file_path[256];
 	uint8_t* iconBuf;
@@ -181,12 +203,33 @@ static int _update_save_details(const char* sys_path, const save_entry_t* save)
 	LOG("Update Save Details :: Reading %s...", file_path);
 
 	sfo_context_t* sfo = sfo_alloc();
-	if ((sfo_read(sfo, file_path) < 0) || !orbis_UpdateSaveParams(save,
-		(char*) sfo_get_param_value(sfo, "MAINTITLE"), (char*) sfo_get_param_value(sfo, "SUBTITLE"),
-		(char*) sfo_get_param_value(sfo, "DETAIL"), *(uint32_t*) sfo_get_param_value(sfo, "SAVEDATA_LIST_PARAM")))
+	if (!sfo) {
+		errno=ENOMEM;
+		import_step(trace_user,"import metadata",0,0,errno,"sfo_alloc");
+		return 0;
+	}
+	errno = 0;
+	int sfo_result = sfo_read(sfo, file_path);
+	int sfo_error = errno;
+	import_step(trace_user,"import metadata",sfo_result >= 0,sfo_result,sfo_error,"sfo_read");
+	if (sfo_result < 0)
 	{
 		LOG("Unable to read from '%s'", file_path);
 		sfo_free(sfo);
+		errno = sfo_error;
+		return 0;
+	}
+	errno = 0;
+	int update_result = orbis_UpdateSaveParams(save,
+		(char*) sfo_get_param_value(sfo, "MAINTITLE"), (char*) sfo_get_param_value(sfo, "SUBTITLE"),
+		(char*) sfo_get_param_value(sfo, "DETAIL"), *(uint32_t*) sfo_get_param_value(sfo, "SAVEDATA_LIST_PARAM"));
+	int update_error = errno;
+	import_step(trace_user,"import metadata",update_result,update_result,update_error,"UpdateSaveParams");
+	if (!update_result)
+	{
+		LOG("Unable to read from '%s'", file_path);
+		sfo_free(sfo);
+		errno = update_error;
 		return 0;
 	}
 
@@ -275,7 +318,7 @@ static void downloadSaveHDD(const save_entry_t* entry, const char* file)
 	unlink_secure(APOLLO_LOCAL_CACHE "tmpsave.zip");
 
 	snprintf(path, sizeof(path), APOLLO_SANDBOX_PATH "sce_sys/", mount);
-	if (_update_save_details(path, &save))
+	if (_update_save_details(path, &save, 0))
 		show_message("%s\n%s/%s", _("Save game successfully downloaded to:"), save.title_id, save.dir_name);
 	else
 		show_message("%s\n%s/%s", _("Error! Can't update save game:"), save.title_id, save.dir_name);
@@ -283,7 +326,7 @@ static void downloadSaveHDD(const save_entry_t* entry, const char* file)
 	orbis_SaveUmount(mount);
 }
 
-static int _copy_save_hdd(const save_entry_t* save)
+static int _copy_save_hdd(const save_entry_t* save, uint32_t empty_user, int *mount_blocked, uint32_t trace_user)
 {
 	int ret;
 	char copy_path[256];
@@ -294,22 +337,199 @@ static int _copy_save_hdd(const save_entry_t* save)
 		.psid = (uint8_t*) apollo_config.psid,
 	};
 
-	if (!orbis_SaveMount(save, ORBIS_SAVE_DATA_MOUNT_MODE_RDWR | ORBIS_SAVE_DATA_MOUNT_MODE_CREATE2 | ORBIS_SAVE_DATA_MOUNT_MODE_COPY_ICON, mount))
+	if (mount_blocked) *mount_blocked = 0;
+	if (trace_user) google_replace_phase(trace_user,"target mount","before");
+	errno = 0;
+	int uncertain = 0;
+	save_mount_diagnostic_t mount_diagnostic={0};
+	int mounted = empty_user ? orbis_SaveMountEmptyCheckedDiagnostic(save, empty_user, mount, &uncertain,
+		&mount_diagnostic) :
+		orbis_SaveMountChecked(save, ORBIS_SAVE_DATA_MOUNT_MODE_RDWR | ORBIS_SAVE_DATA_MOUNT_MODE_CREATE2 | ORBIS_SAVE_DATA_MOUNT_MODE_COPY_ICON, mount, &uncertain);
+	int mount_error = errno;
+	if (trace_user) google_replace_phase(trace_user,"target mount",mounted?"after ok":"after failed");
+	import_step(trace_user,"import mount",mounted,mounted ? mounted :
+		(empty_user ? mount_diagnostic.native_result : mounted),mount_error,
+		mounted ? (empty_user?"SaveMountEmptyChecked":"SaveMountChecked") :
+		(empty_user && mount_diagnostic.call?mount_diagnostic.call:"SaveMountChecked"));
+	if (!mounted) {
+		if (uncertain && mount_blocked) *mount_blocked = 1;
+		errno = mount_error;
 		return 0;
+	}
 
 	snprintf(copy_path, sizeof(copy_path), APOLLO_SANDBOX_PATH, mount);
 
 	LOG("Copying <%s> to %s...", save->path, copy_path);
-	ret = copy_directory(save->path, save->path, copy_path);
+	errno = 0;
+	copy_diagnostic_t copy_diagnostic={0};
+	ret = empty_user ? copy_directory_diagnostic(save->path, save->path, copy_path, &copy_diagnostic) :
+		copy_directory(save->path, save->path, copy_path);
+	int copy_error = errno;
+	import_step(trace_user,"import copy",ret == SUCCESS,ret == SUCCESS ? ret :
+		(empty_user ? copy_diagnostic.native_result : ret),copy_error,
+		ret == SUCCESS ? "copy_directory" : (empty_user && copy_diagnostic.call ? copy_diagnostic.call : "copy_directory"));
+	if (!empty_user)
+	{
+		snprintf(copy_path, sizeof(copy_path), "%s" "sce_sys/", save->path);
+		_update_save_details(copy_path, save, 0);
+		snprintf(copy_path, sizeof(copy_path), APOLLO_SANDBOX_PATH "sce_sys/param.sfo", mount);
+		patch_sfo(copy_path, &patch);
+		orbis_SaveUmount(mount);
+		return ret == SUCCESS;
+	}
 
-	snprintf(copy_path, sizeof(copy_path), "%s" "sce_sys/", save->path);
-	_update_save_details(copy_path, save);
+	int ok = ret == SUCCESS;
+	int failure_error = ok ? 0 : copy_error;
+	if (ok) {
+		snprintf(copy_path, sizeof(copy_path), "%s" "sce_sys/", save->path);
+		errno = 0;
+		ok = _update_save_details(copy_path, save, trace_user);
+		int metadata_error = errno;
+		if (!ok) failure_error = metadata_error;
+	}
+	if (ok) {
+		snprintf(copy_path, sizeof(copy_path), APOLLO_SANDBOX_PATH "sce_sys/param.sfo", mount);
+		errno = 0;
+		int patch_result = patch_sfo(copy_path, &patch);
+		ok = patch_result >= 0;
+		int ownership_error = errno;
+		import_step(trace_user,"import ownership",ok,patch_result,ownership_error,"patch_sfo");
+		if (!ok) failure_error = ownership_error;
+	}
+	if (trace_user) google_replace_phase(trace_user,"unmount","before");
+	errno = 0;
+	int unmount_native = 0;
+	int unmounted = orbis_SaveUmountStatus(mount, &unmount_native);
+	int unmount_error = errno;
+	if (trace_user) google_replace_phase(trace_user,"unmount",unmounted?"after ok":"after failed");
+	import_step(trace_user,"import unmount",unmounted,unmount_native,unmount_error,"umountSave");
+	if (!unmounted) { ok = 0; failure_error = unmount_error; if (mount_blocked) *mount_blocked = 1; }
 
-	snprintf(copy_path, sizeof(copy_path), APOLLO_SANDBOX_PATH "sce_sys/param.sfo", mount);
-	patch_sfo(copy_path, &patch);
-	orbis_SaveUmount(mount);
+	errno = ok ? 0 : failure_error;
+	return ok;
+}
 
-	return (ret == SUCCESS);
+static int import_staged_save_inner(const char *stage, const char *title, const char *directory, uint32_t user,
+	int (*cancelled)(void*), void *data, int *mount_blocked, uint32_t trace_user)
+{
+	if (mount_blocked) *mount_blocked = 0;
+	import_input_result input_result;
+	if (!import_input_valid(stage,title,directory,user,apollo_config.user_id,
+		apollo_config.account_id,cancelled,data,&input_result)) {
+		import_step(trace_user,"import input",0,input_result.native_result,0,input_result.call);
+		return 0;
+	}
+	import_step(trace_user,"import input",1,1,0,"input");
+	if (strlen(title) != 9 || strncmp(title, "CUSA", 4) || !*directory ||
+		strlen(directory) >= ORBIS_SAVE_DATA_DIRNAME_DATA_MAXSIZE) {
+		import_step(trace_user,"import scan",0,0,0,"identity");
+		return 0;
+	}
+	for (const unsigned char *p = (const unsigned char*)directory; *p; p++)
+		if (*p < 32 || *p == 127 || *p == '/' || *p == '\\' || *p == ':') {
+			import_step(trace_user,"import scan",0,0,0,"identity");
+			return 0;
+		}
+	struct stat st;
+	int native_error;
+	errno = 0;
+	int fs_ready = restore_fs_init(&native_error);
+	if (!fs_ready) {
+		int error = errno;
+		import_step(trace_user,"import scan",0,native_error,error,"restore_fs_init");
+		return 0;
+	}
+	errno = 0;
+	int stat_result = restore_fs_lstat(stage, &st);
+	if (stat_result) {
+		int error = errno;
+		import_step(trace_user,"import scan",0,stat_result,error,"stage_lstat");
+		return 0;
+	}
+	if (!S_ISDIR(st.st_mode) || (st.st_mode & 077)) {
+		import_step(trace_user,"import scan",0,(int)st.st_mode,0,"stage_type");
+		return 0;
+	}
+	char source_root[512], expected[768];
+	int n = snprintf(source_root, sizeof(source_root), "%s/", stage);
+	if (n < 0 || (size_t)n >= sizeof(source_root)) {
+		import_step(trace_user,"import scan",0,n,0,"root_length");
+		return 0;
+	}
+	n = snprintf(expected, sizeof(expected), "%sPS4/APOLLO/%s/sce_sys/param.sfo", source_root, directory);
+	if (n < 0 || (size_t)n >= sizeof(expected)) {
+		import_step(trace_user,"import scan",0,n,0,"sfo_path_length");
+		return 0;
+	}
+	errno = 0;
+	stat_result = restore_fs_lstat(expected, &st);
+	if (stat_result) {
+		int error = errno;
+		import_step(trace_user,"import scan",0,stat_result,error,"param_sfo_lstat");
+		return 0;
+	}
+	if (!S_ISREG(st.st_mode)) {
+		import_step(trace_user,"import scan",0,(int)st.st_mode,0,"param_sfo_type");
+		return 0;
+	}
+	errno = 0;
+	list_t *list = ReadUsbList(source_root);
+	int scan_error = errno;
+	if (!list) {
+		import_step(trace_user,"import scan",0,0,scan_error,"ReadUsbList");
+		return 0;
+	}
+	save_entry_t *match = NULL;
+	for (list_node_t *node = list_head(list); node; node = list_next(node)) {
+		save_entry_t *item = list_get(node);
+		if (item && item->type == FILE_TYPE_PS4 && !(item->flags & (SAVE_FLAG_LOCKED | SAVE_FLAG_HDD)) &&
+			item->title_id && item->dir_name && !strcmp(item->title_id, title) && !strcmp(item->dir_name, directory)) {
+			match = item;
+			break;
+		}
+	}
+	n = snprintf(expected, sizeof(expected), "%sPS4/APOLLO/%s/", source_root, directory);
+	int ok = match && n >= 0 && (size_t)n < sizeof(expected) && match->path && !strcmp(match->path, expected) &&
+		match->title_id && !strcmp(match->title_id, title) && match->dir_name && !strcmp(match->dir_name, directory) &&
+		user == apollo_config.user_id && !cancelled(data);
+	import_step(trace_user,"import scan",ok,ok,0,"match");
+	if (!ok) errno = 0;
+	/* This is the final check before the existing HDD copy/resign pipeline.
+	   save_mount(empty=1) repeats it while creating the target. */
+	if (ok) {
+		errno = 0;
+		int absent = orbis_SaveTargetAbsent(match, user);
+		int absence_error = errno;
+		ok = absent == 1;
+		import_step(trace_user,"import target absence",ok,absent,absence_error,"SaveTargetAbsent");
+		if (ok && (user != apollo_config.user_id || cancelled(data))) {
+			import_step(trace_user,"import input",0,0,0,"cancelled_before_copy");
+			ok=0;
+		}
+	}
+	if (ok) {
+		errno = 0;
+		ok = _copy_save_hdd(match, user, mount_blocked, trace_user);
+	}
+	int import_error = ok ? 0 : errno;
+	UnloadGameList(list);
+	errno = import_error;
+	if (ok && (user != apollo_config.user_id || cancelled(data))) {
+		import_step(trace_user,"import finish",0,0,0,"cancelled_after_copy");
+		return 0;
+	}
+	return ok;
+}
+
+int orbis_ImportStagedSave(const char *stage, const char *title, const char *directory, uint32_t user,
+	int (*cancelled)(void*), void *data, int *mount_blocked, uint32_t trace_user)
+{
+	restore_import_active=1;
+	int result=import_staged_save_inner(stage,title,directory,user,cancelled,data,mount_blocked,trace_user);
+	int saved_errno=errno;
+	restore_import_active=0;
+	errno=saved_errno;
+	return result;
 }
 
 static int _copy_save_pfs(const save_entry_t* save)
@@ -370,7 +590,7 @@ static int _copy_save_pfs(const save_entry_t* save)
 	patch_sfo(hdd_path, &patch);
 
 	*strrchr(hdd_path, 'p') = 0;
-	_update_save_details(hdd_path, save);
+	_update_save_details(hdd_path, save, 0);
 	orbis_SaveUmount(mount);
 
 	LOG("Encrypted save copied: %s/%s", save->title_id, save->dir_name);
@@ -387,7 +607,7 @@ static void copySaveHDD(const save_entry_t* save)
 	}
 
 	init_loading_screen(_("Copying save game..."));
-	int ret = _copy_save_hdd(save);
+	int ret = _copy_save_hdd(save, 0, NULL, 0);
 	stop_loading_screen();
 
 	if (ret)
@@ -417,7 +637,7 @@ static void copyAllSavesHDD(const save_entry_t* save, int all)
 		if (item->flags & SAVE_FLAG_LOCKED)
 			(_copy_save_pfs(item) == SUCCESS) ? done++ : err_count++;
 		else
-			_copy_save_hdd(item) ? done++ : err_count++;
+			_copy_save_hdd(item, 0, NULL, 0) ? done++ : err_count++;
 	}
 
 	end_progress_bar();
@@ -716,7 +936,7 @@ static int webReqHandler(dWebRequest_t* req, dWebResponse_t* res, void* list)
 
 		fprintf(f, "<html><head><meta charset=\"UTF-8\"><style>h1, h2 { font-family: arial; } img { display: none; } table { border-collapse: collapse; margin: 25px 0; font-size: 0.9em; font-family: sans-serif; min-width: 400px; box-shadow: 0 0 20px rgba(0, 0, 0, 0.15); } table thead tr { background-color: #009879; color: #ffffff; text-align: left; } table th, td { padding: 12px 15px; } table tbody tr { border-bottom: 1px solid #dddddd; } table tbody tr:nth-of-type(even) { background-color: #f3f3f3; } table tbody tr:last-of-type { border-bottom: 2px solid #009879; }</style>");
 		fprintf(f, "<script language=\"javascript\">function show(sid,src){var im=document.getElementById('img'+sid);im.src=src;im.style.display='block';document.getElementById('btn'+sid).style.display='none';}</script>");
-		fprintf(f, "<title>Apollo Save Tool</title></head><body><h1>.:: Apollo Save Tool</h1><h2>Index of %s</h2><table><thead><tr><th>Name</th><th>Icon</th><th>Title ID</th><th>Folder</th><th>Location</th></tr></thead><tbody>", selected_entry->path);
+		fprintf(f, "<title>PS4 Cloud Save by Znichka</title></head><body><h1>PS4 Cloud Save by Znichka</h1><p>Based on Apollo Save Tool by Bucanero</p><h2>Index of %s</h2><table><thead><tr><th>Name</th><th>Icon</th><th>Title ID</th><th>Folder</th><th>Location</th></tr></thead><tbody>", selected_entry->path);
 
 		int i = 0;
 		for (node = list_head(list); (item = list_get(node)); node = list_next(node), i++)
@@ -1790,6 +2010,24 @@ static void toggleBrowserHistory(int usr)
 
 void execCodeCommand(code_entry_t* code, const char* codecmd)
 {
+    google_drive_status google_status;
+    google_drive_snapshot(&google_status);
+    if (google_status.busy || google_status.mount_blocked) return;
+    if (codecmd[0] == CMD_UPLOAD_GOOGLE) {
+        code->activated = 0;
+        if (selected_entry->type != FILE_TYPE_PS4 ||
+            !(selected_entry->flags & SAVE_FLAG_HDD) ||
+            (selected_entry->flags & (SAVE_FLAG_TROPHY|SAVE_FLAG_LOCKED))) return;
+        if (show_dialog(DIALOG_TYPE_YESNO, "Back up to Google Drive?\n[%s] %s\n%s",
+            selected_entry->title_id, selected_entry->dir_name, selected_entry->name))
+            google_drive_ui_upload(selected_entry->name,selected_entry->title_id,
+                selected_entry->dir_name,apollo_config.user_id);
+        return; /* Upload worker owns mounting: never enter generic mount below. */
+    }
+	/* Refuse private credentials even if an entry reaches us outside the save list. */
+	if (selected_entry->title_id && selected_entry->dir_name &&
+		!strcmp(selected_entry->title_id, "PSSY00001") &&
+		!strcmp(selected_entry->dir_name, "GoogleAuth")) return;
 	char *tmp = NULL;
 	char mount[ORBIS_SAVE_DATA_DIRNAME_DATA_MAXSIZE];
 

@@ -8,16 +8,290 @@
 #include "menu_gui.h"
 #include "libfont.h"
 #include "orbisPad.h"
+#include "google_drive.h"
+#include "google_replace.h"
+
+static int google_panel;
+static int google_help_page;
+static int google_help_only;
+static unsigned google_selection;
+static size_t google_text_prefix(const char *text, size_t limit)
+{
+    size_t n = strlen(text);
+    if (n <= limit) return n;
+    n = limit;
+    while (n && ((unsigned char)text[n] & 0xc0) == 0x80) n--;
+    return n;
+}
+void google_drive_ui_upload(const char *game, const char *title, const char *directory, uint32_t user)
+{
+    if (!google_drive_upload_start(game,title,directory,user)) {
+        show_message("Unable to start Google Drive backup."); return;
+    }
+    google_panel = 1;
+}
+static void google_text(const char *text, int y, int bottom)
+{
+    char line[73];
+    while (*text && y <= bottom) {
+        size_t n = google_text_prefix(text,64);
+        const char *newline = memchr(text, '\n', n);
+        if (newline) n = (size_t)(newline - text);
+        else if (text[n] && text[n] != ' ') {
+            size_t word = n;
+            while (word && text[word] != ' ') word--;
+            if (word) n = word;
+        }
+        memcpy(line, text, n); line[n] = 0;
+        DrawString(180, y, line);
+        y += 50; text += n;
+        while (*text == ' ' || *text == '\n') text++;
+    }
+    if (*text) DrawString(180, bottom, "...");
+}
+static void google_help_line(int y, const char *line, int heading)
+{
+    SetFontSize(heading ? 44 : 39, heading ? 50 : 45);
+    SetFontColor((heading ? APP_FONT_TITLE_COLOR : APP_FONT_COLOR) | 0xFF, 0);
+    DrawString(155, y, line);
+}
+static char google_button_symbol(int texture_index)
+{
+    if (texture_index == footer_ico_cross_png_index)
+        return orbisPadGetConf()->crossButtonOK ? CHAR_BTN_X : CHAR_BTN_O;
+    if (texture_index == footer_ico_circle_png_index)
+        return orbisPadGetConf()->crossButtonOK ? CHAR_BTN_O : CHAR_BTN_X;
+    if (texture_index == footer_ico_square_png_index) return CHAR_BTN_S;
+    return CHAR_BTN_T;
+}
+static void google_help_action(int y, const char *lead, int texture_index, const char *action)
+{
+    char line[160];
+    snprintf(line, sizeof(line), "%s %c %s", lead, google_button_symbol(texture_index), action);
+    google_help_line(y, line, 0);
+}
+static void google_draw_help(void)
+{
+    DrawHeader(cat_opt_png_index, 0, "Google Drive: How to use", NULL,
+        APP_FONT_TITLE_COLOR | 0xFF, 0xffffffff, 0);
+    SetFontAlign(FONT_ALIGN_LEFT);
+    if (google_help_page == 1) {
+        google_help_line(205, "ACCOUNT IDS FOR CROSS-CONSOLE RESTORE", 1);
+        google_help_line(285, "Matching offline Account IDs on both PS4s can be needed.", 0);
+        google_help_line(355, "About shows the current profile's Account ID.", 0);
+        google_help_line(425, "This app: User Tools > Activate PS4 Accounts.", 0);
+        google_help_line(495, "Select an inactive profile and enter the matching ID.", 0);
+        google_help_line(565, "Use the same 16-digit hex Account ID on both PS4s.", 0);
+        google_help_line(635, "Reboot when prompted, then reopen this app.", 0);
+        google_help_line(705, "Local PS4 user IDs may differ.", 0);
+        google_help_line(775, "This in-app feature needs no PSN sign-in.", 0);
+    } else if (google_help_page == 2) {
+        google_help_line(205, "BACK UP AND RESTORE", 1);
+        google_help_line(285, "1. Both PS4s: Settings > Connect Google Drive; use URL/code.", 0);
+        google_help_line(360, "2. HDD Saves > select a save > Back up to Google Drive.", 0);
+        google_help_line(435, "3. Open Google Drive and select the backup.", 0);
+        google_help_action(510, "4.", footer_ico_cross_png_index, "Download and verify the backup.");
+        google_help_action(585, "5. Empty slot?", footer_ico_cross_png_index, "Restore the downloaded save.");
+        google_help_action(660, "6. Save exists?", footer_ico_triangle_png_index, "Replace; do not delete it first.");
+        google_help_line(745, "Backups stay in Drive. A failed restore retains its ZIP.", 0);
+    } else {
+        google_help_line(205, "REPLACE AND RECOVERY", 1);
+        google_help_line(285, "Before Replace, keep a separate backup of the target.", 0);
+        google_help_line(360, "Replace verifies a rollback before removing the target.", 0);
+        google_help_line(435, "Keep the console awake until Replace finishes.", 0);
+        google_help_line(510, "After a failed restore, read the error and keep the ZIP.", 0);
+        google_help_line(585, "If recovery is pending, press R1 to retry recovery.", 0);
+        google_help_line(660, "Recovery is best effort; the target may be partial.", 0);
+        google_help_action(735, "", footer_ico_circle_png_index, "Discard a ready download or return.");
+        google_help_line(810, "Log: /data/ps4-save-sync/google_restore.log", 0);
+    }
+    SetFontSize(37, 43);
+    SetFontColor(APP_FONT_COLOR | 0xFF, 0);
+    DrawFormatString(155, 975, "Page %d / 3    L1 / R1: page       %c / %c close", google_help_page,
+        google_button_symbol(footer_ico_square_png_index),
+        google_button_symbol(footer_ico_circle_png_index));
+}
+void google_drive_ui_help(void)
+{
+    google_help_only = !google_panel;
+    google_panel = 1;
+    google_help_page = 1;
+}
+void google_drive_ui_start(int action)
+{
+    google_selection = 0;
+    google_help_page = 0;
+    if (!google_drive_start(action, apollo_config.user_id)) {
+        if (google_replace_pending(apollo_config.user_id,NULL)!=0) {
+            google_panel=1;
+            return;
+        }
+        show_message("Unable to start Google Drive operation.");
+        return;
+    }
+    google_panel = 1;
+}
+
+int google_drive_ui_frame(void)
+{
+    google_drive_status status;
+    google_backup pending_backup={0};
+    if (!google_panel) return 0;
+    if (google_help_page) {
+        if (orbisPadGetButtonPressed(ORBIS_PAD_BUTTON_R1) && google_help_page < 3) google_help_page++;
+        if (orbisPadGetButtonPressed(ORBIS_PAD_BUTTON_L1) && google_help_page > 1) google_help_page--;
+        if (orbisPadGetButtonPressed(ORBIS_PAD_BUTTON_SQUARE) ||
+            orbisPadGetButtonPressed(ORBIS_PAD_BUTTON_CIRCLE)) {
+            google_draw_help();
+            google_help_page = 0;
+            if (google_help_only) google_panel = 0;
+            google_help_only = 0;
+            return 1;
+        }
+        google_draw_help();
+        return 1;
+    }
+    google_drive_snapshot(&status);
+    int pending=google_replace_pending(apollo_config.user_id,&pending_backup);
+    if (!status.busy && orbisPadGetButtonPressed(ORBIS_PAD_BUTTON_SQUARE)) {
+        google_help_page = 1;
+        google_draw_help();
+        return 1;
+    }
+    if (!status.busy && !status.mount_blocked && pending==1 &&
+        orbisPadGetButtonPressed(ORBIS_PAD_BUTTON_R1)) {
+        if (show_dialog(DIALOG_TYPE_YESNO,
+            "Retry best-effort recovery of %s/%s for user %08x?\nThe target may be partial. The retained rollback ZIP will be used. Power loss can still interrupt recovery.",
+            pending_backup.title,pending_backup.directory,apollo_config.user_id) &&
+            !google_drive_start(GOOGLE_RECOVER,apollo_config.user_id))
+            show_message("Unable to start recovery. Journal and ZIPs retained.");
+        return 1;
+    }
+    if (!status.busy && !status.mount_blocked && pending==0 && status.restore_ready &&
+        orbisPadGetButtonPressed(ORBIS_PAD_BUTTON_CROSS)) {
+        const google_backup *b=&status.restore_backup;
+        if (show_dialog(DIALOG_TYPE_YESNO,"Restore into an EMPTY save slot?\nGame: %s\nTitle ID: %s\nSave directory: %s\nBackup UTC: %s\nCurrent PS4 user: %08x\nExisting saves will be refused.",
+            b->game,b->title,b->directory,b->utc,apollo_config.user_id)) {
+            if (!google_drive_start(GOOGLE_RESTORE,apollo_config.user_id)) show_message("Unable to start restore for this PS4 user.");
+        } else google_drive_discard_download(apollo_config.user_id);
+        /* Do not consume the same confirm/cancel again below this dialog. */
+        return 1;
+    }
+    if (!status.busy && !status.mount_blocked && pending==0 && status.restore_ready &&
+        orbisPadGetButtonPressed(ORBIS_PAD_BUTTON_TRIANGLE)) {
+        const google_backup *b=&status.restore_backup;
+        if (show_dialog(DIALOG_TYPE_YESNO,
+            "REPLACE existing save?\nGame: %s\nTitle ID: %s\nSave directory: %s\nUser: %08x\nA verified rollback will be uploaded first. Replacement is not atomic; power loss can leave the save missing or partial. Recovery is best effort.",
+            b->game,b->title,b->directory,apollo_config.user_id) &&
+            !google_drive_start(GOOGLE_REPLACE,apollo_config.user_id))
+            show_message("Unable to start replacement for this PS4 user.");
+        return 1;
+    }
+    if (!status.busy && status.browsing) {
+        if (google_selection >= status.backups.count) google_selection = 0;
+        if (orbisPadGetButtonPressed(ORBIS_PAD_BUTTON_UP) && google_selection) google_selection--;
+        if (orbisPadGetButtonPressed(ORBIS_PAD_BUTTON_DOWN) && google_selection + 1 < status.backups.count) google_selection++;
+        if (orbisPadGetButtonPressed(ORBIS_PAD_BUTTON_R1) && status.backups.next[0]) google_drive_ui_start(GOOGLE_NEXT);
+        if (orbisPadGetButtonPressed(ORBIS_PAD_BUTTON_CROSS) && status.backups.count &&
+            !google_drive_download_start(google_selection,apollo_config.user_id))
+            show_message("Unable to start Google Drive download.");
+    }
+    if (orbisPadGetButtonPressed(ORBIS_PAD_BUTTON_CIRCLE)) {
+        if (status.mount_blocked) { /* Require restart after an unconfirmed unmount. */ }
+        else if (status.busy && status.cancellable) google_drive_cancel();
+        else if (status.busy) { /* Let atomic credential updates finish. */ }
+        else if (pending==1) google_panel=0;
+        else if (status.restore_ready) {
+            if (google_drive_discard_download(apollo_config.user_id)) google_panel=0;
+        } else google_panel = 0;
+    }
+    DrawHeader(cat_opt_png_index, 0, "Google Drive", NULL, APP_FONT_TITLE_COLOR | 0xFF, 0xffffffff, 0);
+    SetFontAlign(FONT_ALIGN_LEFT);
+    SetFontSize(38, 44);
+    SetFontColor(APP_FONT_COLOR | 0xFF, 0);
+    /* Wrap sanitized text; reserve generous width for Google's returned values. */
+    google_text(status.message, 220, status.browsing ? 300 : 375);
+    const int show_details = !status.browsing && pending==0 &&
+        !status.restore_ready && !status.verification_url[0];
+    if (show_details && status.preparation_details[0])
+        google_text(status.preparation_details, 460, status.discovery_details[0] ? 585 : 825);
+    if (status.total_bytes)
+        DrawFormatString(180, 390, "Transfer: %llu / %llu bytes (%u%%)",
+            (unsigned long long)status.completed_bytes, (unsigned long long)status.total_bytes,
+            (unsigned)(100.0 * status.completed_bytes / status.total_bytes));
+    if (show_details && status.discovery_details[0])
+        google_text(status.discovery_details, status.preparation_details[0] ? 625 : 460, 825);
+    if (!status.busy && pending!=0) {
+        char last_phase[112];
+        if (!google_replace_last_phase(apollo_config.user_id,last_phase,sizeof(last_phase)))
+            snprintf(last_phase,sizeof(last_phase),"unavailable");
+        DrawString(180,790,"Last Replace phase:");
+        google_text(last_phase,835,890);
+    }
+    if (!status.busy && pending==1) {
+        DrawFormatString(180,690,"Recovery pending: %s / %s, user %08x",
+            pending_backup.title,pending_backup.directory,apollo_config.user_id);
+        DrawString(180,750,"Target may be partial. Both ZIPs and journal are retained.");
+        DrawFormatString(180,935,"R1: retry recovery    %c close",
+            google_button_symbol(footer_ico_circle_png_index));
+    } else if (!status.busy && pending<0) {
+        DrawString(180,750,"Replacement journal cannot be verified. Save operations blocked.");
+    }
+    if (!status.busy && pending==0 && status.restore_ready) {
+        const google_backup *b=&status.restore_backup;
+        DrawFormatString(180,670,"Game: %.*s",(int)google_text_prefix(b->game,65),b->game);
+        DrawFormatString(180,720,"Title: %s  Save: %s",b->title,b->directory);
+        DrawFormatString(180,770,"Backup UTC: %s  Current user: %08x",b->utc,apollo_config.user_id);
+        DrawFormatString(180,875,"%c empty slot    %c replace    %c discard",
+            google_button_symbol(footer_ico_cross_png_index),
+            google_button_symbol(footer_ico_triangle_png_index),
+            google_button_symbol(footer_ico_circle_png_index));
+    }
+    if (!status.busy && status.browsing) {
+        SetFontSize(34, 40);
+        for (unsigned i=0;i<status.backups.count;i++) {
+            const google_backup *b=&status.backups.entries[i].backup;
+            /* All remote values are arguments, never format strings. */
+            DrawFormatString(180,350+i*40,"%s [%s] %s  %.*s",i==google_selection?">":" ",b->title,b->utc,
+                (int)google_text_prefix(b->game,42),b->game);
+        }
+        SetFontSize(36, 42);
+        if (status.backups.count) {
+            const google_backup *b=&status.backups.entries[google_selection].backup;
+            DrawFormatString(180,775,"Game: %.*s",(int)google_text_prefix(b->game,65),b->game);
+            DrawFormatString(180,820,"Save: %s",b->directory);
+            DrawFormatString(180,865,"Backup: %s  Size: %llu bytes",b->utc,(unsigned long long)b->size);
+        }
+        DrawFormatString(180,920,"Up/Down: select    %c download    R1: next page",
+            google_button_symbol(footer_ico_cross_png_index));
+    }
+    if (status.verification_url[0]) {
+        DrawString(180, 480, "Verification URL:");
+        google_text(status.verification_url, 530, 665);
+        DrawString(180, 710, "User code (case sensitive):");
+        google_text(status.user_code, 760, 860);
+    }
+    if (status.mount_blocked)
+        DrawString(180, 995, "Mount state uncertain. Stop save operations.");
+    else if (status.busy && !status.cancellable)
+        DrawString(180, 995, "Finishing operation...");
+    else
+        DrawFormatString(180, 995, "%c %s", google_button_symbol(footer_ico_circle_png_index),
+            status.busy ? "cancel operation" : "return");
+    if (!status.busy) DrawFormatString(1120, 995, "%c How to use",
+        google_button_symbol(footer_ico_square_png_index));
+    return 1;
+}
 
 static void _draw_OptionsMenu(u8 alpha)
 {
 	int c = 0;
-
-    SetFontSize(APP_FONT_SIZE_SELECTION);
-    for (int ind = 0, y_off = 200; menu_options[ind].name; ind++, y_off += APP_LINE_OFFSET)
+	const int row_height = 51;
+	SetFontSize(43, 47);
+    for (int ind = 0, y_off = 180; menu_options[ind].name; ind++, y_off += row_height)
     {
         if (menu_options[ind].spacer)
-            y_off += APP_LINE_OFFSET;
+			y_off += row_height / 2;
 
         SetFontColor(APP_FONT_COLOR | alpha, 0);
         DrawString(MENU_ICON_OFF + MENU_TITLE_OFF + 50, y_off, menu_options[ind].name);
@@ -30,7 +304,7 @@ static void _draw_OptionsMenu(u8 alpha)
 				break;
 
 			case APP_OPTION_CALL:
-				DrawTexture(&menu_textures[orbisPadGetConf()->crossButtonOK ? footer_ico_cross_png_index : footer_ico_circle_png_index], OPTION_ITEM_OFF - 29, y_off+2, 0, menu_textures[footer_ico_cross_png_index].width, menu_textures[footer_ico_cross_png_index].height, 0xFFFFFF00 | alpha);
+				DrawTexture(&menu_textures[orbisPadGetConf()->crossButtonOK ? footer_ico_cross_png_index : footer_ico_circle_png_index], OPTION_ITEM_OFF - 29, y_off+2, 0, 32, 32, 0xFFFFFF00 | alpha);
 				break;
 
 			case APP_OPTION_LIST:
@@ -52,7 +326,7 @@ static void _draw_OptionsMenu(u8 alpha)
         if (menu_sel == ind)
         {
             DrawTexture(&menu_textures[mark_line_png_index], 0, y_off, 0, SCREEN_WIDTH, menu_textures[mark_line_png_index].height * 2, 0xFFFFFF00 | alpha);
-            DrawTextureCenteredX(&menu_textures[mark_arrow_png_index], MENU_ICON_OFF + MENU_TITLE_OFF, y_off, 0, (2 * APP_LINE_OFFSET) / 3, APP_LINE_OFFSET + 2, 0xFFFFFF00 | alpha);
+			DrawTextureCenteredX(&menu_textures[mark_arrow_png_index], MENU_ICON_OFF + MENU_TITLE_OFF, y_off, 0, (2 * row_height) / 3, row_height + 2, 0xFFFFFF00 | alpha);
         }
     }
 }

@@ -12,6 +12,8 @@
 #include "menu.h"
 #include "saves.h"
 #include "common.h"
+#include "google_drive.h"
+#include "account_identity.h"
 
 #define _i18n(str) (str)
 #define ORBIS_USER_SERVICE_USER_ID_INVALID	-1
@@ -29,8 +31,18 @@ static void clearcache_callback(int sel);
 static void upd_appdata_callback(int sel);
 static void server_callback(int sel);
 static void ftp_url_callback(int sel);
+static void google_connect_callback(int sel) { (void)sel; google_drive_ui_start(GOOGLE_CONNECT); }
+static void google_status_callback(int sel) { (void)sel; google_drive_ui_start(GOOGLE_CHECK); }
+static void google_disconnect_callback(int sel) { (void)sel; google_drive_ui_start(GOOGLE_DISCONNECT); }
+static void google_backups_callback(int sel) { (void)sel; google_drive_ui_start(GOOGLE_BROWSE); }
+static void google_help_callback(int sel) { (void)sel; google_drive_ui_help(); }
 
 menu_option_t menu_options[] = {
+	{ .name = _i18n("Google Drive: How to use"), .type = APP_OPTION_CALL, .callback = google_help_callback },
+    { .name = _i18n("Google Drive Backups"), .type = APP_OPTION_CALL, .callback = google_backups_callback },
+	{ .name = _i18n("Connect Google Drive"), .type = APP_OPTION_CALL, .callback = google_connect_callback },
+	{ .name = _i18n("Connection Status"), .type = APP_OPTION_CALL, .callback = google_status_callback },
+	{ .name = _i18n("Disconnect Google Drive"), .type = APP_OPTION_CALL, .callback = google_disconnect_callback },
 	{ .name = _i18n("Background Music"), 
 		.options = NULL, 
 		.type = APP_OPTION_BOOL, 
@@ -54,12 +66,6 @@ menu_option_t menu_options[] = {
 		.type = APP_OPTION_LIST,
 		.value = &apollo_config.usb_dev,
 		.callback = usb_callback
-	},
-	{ .name = _i18n("Version Update Check"),
-		.options = NULL, 
-		.type = APP_OPTION_BOOL, 
-		.value = &apollo_config.update, 
-		.callback = update_callback 
 	},
 	{ .name = _i18n("Set User FTP Server URL"),
 		.options = NULL,
@@ -210,82 +216,6 @@ static void upd_appdata_callback(int sel)
 	unlink_secure(APOLLO_LOCAL_CACHE "appdata.zip");
 }
 
-void update_callback(int sel)
-{
-    apollo_config.update = !sel;
-
-    if (!apollo_config.update)
-        return;
-
-	LOG("checking latest Apollo version at %s", APOLLO_UPDATE_URL);
-
-	if (!http_download(APOLLO_UPDATE_URL, NULL, APOLLO_LOCAL_CACHE "ver.check", 0))
-	{
-		LOG("http request to %s failed", APOLLO_UPDATE_URL);
-		return;
-	}
-
-	char *buffer = readTextFile(APOLLO_LOCAL_CACHE "ver.check");
-	if (!buffer)
-		return;
-
-	LOG("received %ld bytes", strlen(buffer));
-
-	static const char find[] = "\"name\":\"Apollo Save Tool v";
-	const char* start = strstr(buffer, find);
-	if (!start)
-	{
-		LOG("no name found");
-		goto end_update;
-	}
-
-	LOG("found name");
-	start += sizeof(find) - 1;
-
-	char* end = strchr(start, '"');
-	if (!end)
-	{
-		LOG("no end of name found");
-		goto end_update;
-	}
-	*end = 0;
-	LOG("latest version is %s", start);
-
-	if (strcasecmp(APOLLO_VERSION, start) == 0)
-	{
-		LOG("no need to update");
-		goto end_update;
-	}
-
-	start = strstr(end+1, "\"browser_download_url\":\"");
-	if (!start)
-		goto end_update;
-
-	start += 24;
-	end = strchr(start, '"');
-	if (!end)
-	{
-		LOG("no download URL found");
-		goto end_update;
-	}
-
-	*end = 0;
-	LOG("download URL is %s", start);
-
-	if (show_dialog(DIALOG_TYPE_YESNO, _("New version available! Download update?")))
-	{
-		char* pkg_path = (dir_exists("/data/pkg") == SUCCESS) ? "/data/pkg/apollo-ps4.pkg" : "/data/apollo-ps4.pkg";
-		if (http_download(start, NULL, pkg_path, 1))
-			show_message(_("Update downloaded to %s"), pkg_path);
-		else
-			show_message(_("Download error!"));
-	}
-
-end_update:
-	free(buffer);
-	return;
-}
-
 static void log_callback(int sel)
 {
 	apollo_config.dbglog = !sel;
@@ -351,7 +281,8 @@ int save_app_settings(app_config_t* config)
 	snprintf(filePath, sizeof(filePath), APOLLO_SETTING_PATH "settings.bin", mountResult.mountPathName);
 	write_buffer(filePath, (uint8_t*) config, sizeof(app_config_t));
 
-	updateSaveParams(mountResult.mountPathName, "Apollo Save Tool", _("User Settings"), "www.bucanero.com.ar", 0);
+	updateSaveParams(mountResult.mountPathName, "PS4 Cloud Save by Znichka", _("User Settings"),
+		"Based on Apollo Save Tool by Bucanero", 0);
 	if (sceSaveDataUmount((void*)&mountResult.mountPathName) < 0)
 	{
 		LOG("UMOUNT ERROR");
@@ -359,6 +290,11 @@ int save_app_settings(app_config_t* config)
 	}
 
 	return 1;
+}
+
+int account_id_refresh_live(uint32_t user, uint64_t *account_id, int32_t *native_status)
+{
+	return account_identity_refresh(user, account_id, sceUserServiceGetNpAccountId, native_status);
 }
 
 int load_app_settings(app_config_t* config)
@@ -370,7 +306,9 @@ int load_app_settings(app_config_t* config)
 	OrbisSaveDataDirName dirName;
 	OrbisSaveDataMountResult mountResult;
 
-	sceUserServiceGetNpAccountId(config->user_id, &config->account_id);
+	int32_t account_status=0;
+	if (!account_id_refresh_live(config->user_id, &config->account_id, &account_status))
+		LOG("sceUserServiceGetNpAccountId unavailable: status=0x%08X account_id_assigned=0", (uint32_t)account_status);
 	sceKernelGetOpenPsIdForSystem(config->psid);
 
 	if (sceSaveDataInitialize3(0) != SUCCESS)

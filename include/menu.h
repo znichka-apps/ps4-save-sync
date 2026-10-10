@@ -35,29 +35,6 @@ enum texture_index
 {
 	leon_luna_jpg_index,
 	bgimg_jpg_index,
-	column_1_png_index,
-	column_2_png_index,
-	column_3_png_index,
-	column_4_png_index,
-	column_5_png_index,
-	column_6_png_index,
-	column_7_png_index,
-	jar_trophy_png_index,
-	jar_usb_png_index,
-	jar_hdd_png_index,
-	jar_db_png_index,
-	jar_bup_png_index,
-	jar_opt_png_index,
-	jar_about_png_index,
-	jar_trophy_hover_png_index,
-	jar_usb_hover_png_index,
-	jar_hdd_hover_png_index,
-	jar_db_hover_png_index,
-	jar_bup_hover_png_index,
-	jar_opt_hover_png_index,
-	jar_about_hover_png_index,
-	logo_png_index,
-	logo_text_png_index,
 	cat_about_png_index,
 	cat_cheats_png_index,
 	cat_empty_png_index,
@@ -82,7 +59,6 @@ enum texture_index
 	tag_zip_png_index,
 	tag_net_png_index,
 	tag_apply_png_index,
-	buk_scr_png_index,
 	footer_ico_circle_png_index,
 	footer_ico_cross_png_index,
 	footer_ico_square_png_index,
@@ -112,6 +88,8 @@ enum texture_index
 	header_dot_png_index,
 	header_line_png_index,
 	cheat_png_index,
+	znichka_logo_png_index,
+	znichka_icon_png_index,
 
 	TOTAL_MENU_TEXTURES
 };
@@ -128,10 +106,10 @@ enum texture_index
 #define font_adonais_regular				0
 #define font_console_10x20					1
 
-#define APP_FONT_COLOR						0xFFFFFF00
-#define APP_FONT_TAG_COLOR					0xFFFFFF00
-#define APP_FONT_MENU_COLOR					0x00000000
-#define APP_FONT_TITLE_COLOR				0xFFFFFF00
+#define APP_FONT_COLOR						0xE9EEF900
+#define APP_FONT_TAG_COLOR					0xE9EEF900
+#define APP_FONT_MENU_COLOR					0xE9EEF900
+#define APP_FONT_TITLE_COLOR				0xF6D35C00
 #define APP_FONT_SIZE_TITLE					84, 72
 #define APP_FONT_SIZE_SUBTITLE				68, 60
 #define APP_FONT_SIZE_SUBTEXT				36, 36
@@ -146,12 +124,6 @@ enum texture_index
 #define SCREEN_HEIGHT						1080
 
 //Asset sizes
-#define	logo_png_w							478
-#define	logo_png_h							468
-#define bg_water_png_w						1920
-#define bg_water_png_h						230
-
-
 #define scroll_bg_png_x						1810
 #define scroll_bg_png_y						169
 
@@ -163,40 +135,8 @@ enum texture_index
 
 
 //Asset positions
-#define bg_water_png_x						0
-#define bg_water_png_y						851
 #define list_bg_png_x						0
 #define list_bg_png_y						169
-#define logo_png_x							722
-#define logo_png_y							45
-#define column_1_png_x						131
-#define column_1_png_y						908
-#define column_2_png_x						401
-#define column_2_png_y						831
-#define column_3_png_x						638
-#define column_3_png_y						871
-#define column_4_png_x						870
-#define column_4_png_y						831
-#define column_5_png_x						1094
-#define column_5_png_y						942
-#define column_6_png_x						1313
-#define column_6_png_y						828
-#define column_7_png_x						1665
-#define column_7_png_y						955
-#define jar_empty_png_x						159
-#define jar_empty_png_y						777
-#define jar_usb_png_x						441
-#define jar_usb_png_y						699
-#define jar_hdd_png_x						669
-#define jar_hdd_png_y						739
-#define jar_db_png_x						898
-#define jar_db_png_y						700
-#define jar_bup_png_x						1125
-#define jar_bup_png_y						810
-#define jar_opt_png_x						1353
-#define jar_opt_png_y						696
-#define jar_about_png_x						1698
-#define jar_about_png_y						782
 #define cat_any_png_x						40
 #define cat_any_png_y						45
 #define app_ver_png_x						1828
@@ -258,8 +198,6 @@ void LoadVmcTexture(int width, int height, uint8_t* icon);
 void initMenuOptions(void);
 
 void drawScene(void);
-void drawSplashLogo(int m);
-void drawEndLogo(void);
 
 int load_app_settings(app_config_t* config);
 int save_app_settings(app_config_t* config);

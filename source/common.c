@@ -6,6 +6,7 @@
 #include <sys/file.h>
 #include <sys/stat.h>
 #include <dirent.h>
+#include <errno.h>
 #include <zlib.h>
 #include <orbis/SystemService.h>
 
@@ -136,28 +137,42 @@ int copy_file(const char* input, const char* output)
 
     if((fd2 = fopen(output, "wb")) == NULL)
     {
+		int error = errno;
         fclose(fd);
+		errno = error;
         return FAILED;
     }
 
     char* buffer = malloc(TMP_BUFF_SIZE);
 
     if (!buffer)
+    {
+		int error = ENOMEM;
+        fclose(fd2);
+        fclose(fd);
+		errno = error;
         return FAILED;
+    }
 
+    int failed = 0, error = 0;
     do
     {
         read = fread(buffer, 1, TMP_BUFF_SIZE, fd);
         written = fwrite(buffer, 1, read, fd2);
+        if (read != written || ferror(fd) || ferror(fd2)) {
+            failed = 1;
+            error = errno ? errno : EIO;
+            break;
+        }
     }
-    while ((read == written) && (read == TMP_BUFF_SIZE));
+    while (read == TMP_BUFF_SIZE);
 
     free(buffer);
-    fclose(fd);
-    fclose(fd2);
+    if (fclose(fd) && !failed) { failed = 1; error = errno; }
+    if (fclose(fd2) && !failed) { failed = 1; error = errno; }
     chmod(output, 0777);
-
-    return (read - written);
+	if (failed) { errno = error; return FAILED; }
+    return SUCCESS;
 }
 
 uint32_t file_crc32(const char* input)
@@ -185,7 +200,8 @@ uint32_t file_crc32(const char* input)
     return crc;
 }
 
-int copy_directory(const char* startdir, const char* inputdir, const char* outputdir)
+static int copy_directory_inner(const char* startdir, const char* inputdir, const char* outputdir,
+    copy_diagnostic_t *diagnostic)
 {
     char fullname[256];
     char out_name[256];
@@ -194,29 +210,63 @@ int copy_directory(const char* startdir, const char* inputdir, const char* outpu
     DIR *dp = opendir(inputdir);
 
     if (!dp) {
+        if (diagnostic) { diagnostic->call="opendir"; diagnostic->native_result=-1; diagnostic->error=errno; }
         return FAILED;
     }
 
-    while ((dirp = readdir(dp)) != NULL) {
+    while (1) {
+        errno=0;
+        dirp=readdir(dp);
+        if (!dirp) break;
         if ((strcmp(dirp->d_name, ".")  != 0) && (strcmp(dirp->d_name, "..") != 0)) {
             snprintf(fullname, sizeof(fullname), "%s%s", inputdir, dirp->d_name);
 
             if (dirp->d_type == DT_DIR) {
                 strcat(fullname, "/");
-                if (copy_directory(startdir, fullname, outputdir) != SUCCESS) {
+                if (copy_directory_inner(startdir, fullname, outputdir, diagnostic) != SUCCESS) {
+					int error = errno;
+                    closedir(dp);
+					errno = error;
                     return FAILED;
                 }
             } else {
                 snprintf(out_name, sizeof(out_name), "%s%s", outputdir, &fullname[len]);
-                if (copy_file(fullname, out_name) != SUCCESS) {
+                int copy_result=copy_file(fullname, out_name);
+                if (copy_result != SUCCESS) {
+					int error = errno;
+                    if (diagnostic) { diagnostic->call="copy_file"; diagnostic->native_result=copy_result; diagnostic->error=error; }
+                    closedir(dp);
+					errno = error;
                     return FAILED;
                 }
             }
         }
     }
-    closedir(dp);
+    int read_error=errno;
+    int close_result=closedir(dp);
+    if (read_error) {
+        if (diagnostic) { diagnostic->call="readdir"; diagnostic->native_result=-1; diagnostic->error=read_error; }
+        errno=read_error;
+        return FAILED;
+    }
+    if (close_result) {
+        if (diagnostic) { diagnostic->call="closedir"; diagnostic->native_result=close_result; diagnostic->error=errno; }
+        return FAILED;
+    }
 
     return SUCCESS;
+}
+
+int copy_directory_diagnostic(const char* startdir, const char* inputdir, const char* outputdir,
+    copy_diagnostic_t *diagnostic)
+{
+    if (diagnostic) { diagnostic->call="none"; diagnostic->native_result=SUCCESS; diagnostic->error=0; }
+    return copy_directory_inner(startdir,inputdir,outputdir,diagnostic);
+}
+
+int copy_directory(const char* startdir, const char* inputdir, const char* outputdir)
+{
+    return copy_directory_inner(startdir,inputdir,outputdir,NULL);
 }
 
 int clean_directory(const char* inputdir, const char* filter)

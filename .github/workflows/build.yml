@@ -27,6 +27,21 @@ jobs:
         echo "curl_path=oosdk_libraries/curl-7.64.1" >> $GITHUB_ENV
         echo "OO_PS4_TOOLCHAIN=${GITHUB_WORKSPACE}/OpenOrbis/PS4Toolchain" >> $GITHUB_ENV
 
+    - name: Generate Google OAuth build configuration
+      env:
+        GDRIVE_CLIENT_ID: ${{ secrets.GDRIVE_CLIENT_ID }}
+        GDRIVE_CLIENT_SECRET: ${{ secrets.GDRIVE_CLIENT_SECRET }}
+      run: python3 tools/configure_google.py
+
+    - name: Test Google authentication on host
+      run: |
+        sudo apt-get update -qq
+        sudo apt-get install -y libcurl4-openssl-dev libsdl2-dev libmbedtls-dev libzip-dev libsqlite3-dev
+        sh tools/test_google_host.sh
+
+    - name: Test GP4 directory repair
+      run: python3 tools/test_ensure_gp4_dirs.py
+
     - name: Cache OpenOrbis Toolchain
       id: cache-oosdk
       uses: actions/cache@v4
@@ -231,14 +246,15 @@ jobs:
     - name: Add save patches to Package
       run: make createzip
 
-    - name: Build Apollo App Package
-      run: |
-        make
-        mv IV0000-APOL00004_00-APOLLO0000000PS4.pkg apollo-ps4-build_${{ env.sha_name }}.pkg
+    - name: Audit restore SDK compatibility
+      run: python3 tools/audit_restore_sdk.py "${OO_PS4_TOOLCHAIN}" oosdk_libraries/libzip-1.9.2
 
-    - name: Push package artifact
+    - name: Build PS4 Save Sync Package
+      run: make
+
+    - name: Upload PS4 Save Sync package
       uses: actions/upload-artifact@v4
       with:
-        name: apollo-ps4-build_${{ env.sha_name }}
-        path: apollo-ps4-build_${{ env.sha_name }}.pkg
+        name: ps4-save-sync_${{ env.sha_name }}
+        path: IV0000-PSSY00001_00-PS4SAVESYNC00000.pkg
         if-no-files-found: error

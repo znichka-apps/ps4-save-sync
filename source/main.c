@@ -19,7 +19,9 @@
 #include "sfo.h"
 #include "util.h"
 #include "common.h"
+#include "google_drive.h"
 #include "orbisPad.h"
+#include "ambient_audio.h"
 
 //Menus
 #include "menu.h"
@@ -32,7 +34,6 @@
 #include "font-10x20.h"
 
 //Sound
-#include <s3m.h>
 #define SAMPLING_FREQ          48000 /* 48khz. */
 #define AUDIO_SAMPLES          256   /* audio samples */
 
@@ -292,39 +293,8 @@ static int LoadTextures_Menu(void)
 	load_menu_texture(scroll_bg, png);
 	load_menu_texture(scroll_lock, png);
 	load_menu_texture(help, png);
-	load_menu_texture(buk_scr, png);
-	load_menu_texture(cat_about, png);
-	load_menu_texture(cat_cheats, png);
-	load_menu_texture(cat_opt, png);
-	load_menu_texture(cat_usb, png);
-	load_menu_texture(cat_bup, png);
-	load_menu_texture(cat_db, png);
-	load_menu_texture(cat_hdd, png);
-	load_menu_texture(cat_sav, png);
-	load_menu_texture(cat_warning, png);
-	load_menu_texture(column_1, png);
-	load_menu_texture(column_2, png);
-	load_menu_texture(column_3, png);
-	load_menu_texture(column_4, png);
-	load_menu_texture(column_5, png);
-	load_menu_texture(column_6, png);
-	load_menu_texture(column_7, png);
-	load_menu_texture(jar_about, png);
-	load_menu_texture(jar_about_hover, png);
-	load_menu_texture(jar_bup, png);
-	load_menu_texture(jar_bup_hover, png);
-	load_menu_texture(jar_db, png);
-	load_menu_texture(jar_db_hover, png);
-	load_menu_texture(jar_trophy, png);
-	load_menu_texture(jar_trophy_hover, png);
-	load_menu_texture(jar_hdd, png);
-	load_menu_texture(jar_hdd_hover, png);
-	load_menu_texture(jar_opt, png);
-	load_menu_texture(jar_opt_hover, png);
-	load_menu_texture(jar_usb, png);
-	load_menu_texture(jar_usb_hover, png);
-	load_menu_texture(logo, png);
-	load_menu_texture(logo_text, png);
+	load_menu_texture(znichka_logo, png);
+	load_menu_texture(znichka_icon, png);
 	load_menu_texture(tag_lock, png);
 	load_menu_texture(tag_own, png);
 	load_menu_texture(tag_vmc, png);
@@ -355,19 +325,18 @@ static int LoadTextures_Menu(void)
 
 static int LoadSounds(void* data)
 {
-	s3m_t s3m;
-
-	s3m_initialize(&s3m, SAMPLING_FREQ);
-	// Decode a mp3 file to play
-	if (s3m_load(&s3m, APOLLO_APP_PATH "audio/haiku.s3m") < 0)
-	{
-		LOG("[ERROR] Failed to decode audio file");
+	(void)data;
+	size_t loop_samples = 0, cursor = 0;
+	int16_t *music = ambient_audio_load(APOLLO_APP_PATH "audio/ambient.wav", &loop_samples);
+	if (!music) {
+		LOG("Unable to load ambient music WAV; music playback disabled");
 		return -1;
 	}
-	LOG("Loaded audio file: %s", s3m.header->song_name);
-
-	// Calculate the sample count and allocate a buffer for the sample data accordingly
-	uint8_t *pSampleData = (uint8_t*) malloc(AUDIO_SAMPLES * 2 * sizeof(int16_t));
+	int16_t *pSampleData = malloc(AUDIO_SAMPLES * 2 * sizeof(int16_t));
+	if (!pSampleData) {
+		free(music);
+		return -1;
+	}
 
 	// Play the song in a loop
 	while (!close_app)
@@ -378,14 +347,10 @@ static int LoadSounds(void* data)
 			continue;
 		}
 
-		if (!s3m.rt.playing)
-		{
-			// If we reach the end of the file, seek back to the beginning.
-			s3m_play(&s3m);
-		}
-
-		// Decode the wav into pSampleData
-		s3m_sound_callback(NULL, pSampleData, AUDIO_SAMPLES * 2 * sizeof(int16_t));
+		ambient_audio_stereo(music, loop_samples, &cursor, pSampleData, AUDIO_SAMPLES);
+		/* Keep the same loop and toggle, with a slightly quieter output level. */
+		for (size_t i = 0; i < AUDIO_SAMPLES * 2; i++)
+			pSampleData[i] = (int16_t)((int32_t)pSampleData[i] * 78 / 100);
 
 		/* Output audio */
 		sceAudioOutOutput(audio, NULL);	// NULL: wait for completion
@@ -393,13 +358,14 @@ static int LoadSounds(void* data)
 		if (sceAudioOutOutput(audio, pSampleData) < 0)
 		{
 			LOG("Failed to output audio");
+			free(pSampleData);
+			free(music);
 			return -1;
 		}
 	}
 
-	s3m_stop(&s3m);
-	s3m_unload(&s3m);
 	free(pSampleData);
+	free(music);
 
 	return 0;
 }
@@ -531,6 +497,18 @@ static void terminate(void)
 	sceSystemServiceLoadExec("exit", NULL);
 }
 
+// Keep the last completed startup step available when a console exits early.
+static void startup_marker(const char* stage)
+{
+	FILE* file = fopen(APOLLO_PATH "startup_stage.txt", "w");
+	if (file)
+	{
+		fprintf(file, "%s\n", stage);
+		fclose(file);
+	}
+	LOG("Startup: %s", stage);
+}
+
 static int initInternal(void)
 {
     // load common modules
@@ -623,6 +601,7 @@ s32 main(s32 argc, const char* argv[])
 
 	mkdirs(APOLLO_DATA_PATH);
 	mkdirs(APOLLO_LOCAL_CACHE);
+	startup_marker("data directories ready");
 	
 	// Load freetype
 	if (sceSysmoduleLoadModule(ORBIS_SYSMODULE_FREETYPE_OL) < 0)
@@ -655,6 +634,7 @@ s32 main(s32 argc, const char* argv[])
 		LOG("Failed to load menu textures!");
 		return (-1);
 	}
+	startup_marker("menu textures loaded");
 
 	initLocalization();
 	// Load application settings
@@ -680,34 +660,18 @@ s32 main(s32 argc, const char* argv[])
 
 	// dedicated to Leon & Luna ~ in loving memory
 
-#ifndef APOLLO_ENABLE_LOGGING
-	// Splash screen logo (fade-in)
-	drawSplashLogo(1);
-#endif
-
 	// Setup font
 	SetExtraSpace(-15);
 	SetCurrentFont(font_adonais_regular);
 
 	registerSpecialChars();
 	initMenuOptions();
-
-#ifndef APOLLO_ENABLE_LOGGING
-	// Splash screen logo (fade-out)
-	drawSplashLogo(-1);
-#endif
-	SDL_DestroyTexture(menu_textures[buk_scr_png_index].texture);
-	
-	//Set options
-	update_callback(!apollo_config.update);
+	startup_marker("menu initialized");
 
 	// Start BGM audio thread
 	SDL_CreateThread(&LoadSounds, "audio_thread", NULL);
 
-#ifndef APOLLO_ENABLE_LOGGING
-	Draw_MainMenu_Ani();
-#endif
-
+	int first_frame_presented = 0;
 	while (!close_app)
 	{
 #ifdef APOLLO_ENABLE_LOGGING
@@ -733,11 +697,15 @@ s32 main(s32 argc, const char* argv[])
 #endif
 		// Propagate the updated window to the screen
 		SDL_RenderPresent(renderer);
+		if (!first_frame_presented)
+		{
+			startup_marker("first menu frame presented");
+			first_frame_presented = 1;
+		}
 	}
 
-	if (apollo_config.doAni)
-		drawEndLogo();
-
+    // Join Google worker before shutting down SDL or global libcurl.
+    google_drive_shutdown();
     // Cleanup resources
     SDL_DestroyRenderer(renderer);
     SDL_DestroyWindow(window);

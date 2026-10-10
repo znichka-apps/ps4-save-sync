@@ -1,4 +1,20 @@
 # Prerequisites
+include/google_build_config.h
+include/google_build_config.tmp
+# Local OAuth inputs and personal authentication state (never package these).
+client_secret*.json
+credentials*.json
+google_credentials*.json
+*oauth*credentials*.json
+token.json
+tokens.json
+*token*.json
+access_token*
+refresh_token*
+.env
+.env.*
+__pycache__/
+*.pyc
 *.d
 
 # Object files
@@ -54,6 +70,7 @@ Mkfile.old
 dkms.conf
 /**/*.pkg
 /**/*.gp4
+/*.gp4.tmp*
 /**/sce_sys/
 /**/build/
 /**/Debug/

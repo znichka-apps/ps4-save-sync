@@ -11,6 +11,7 @@
 #include "libfont.h"
 #include "ttf_render.h"
 #include "common.h"
+#include "google_drive.h"
 #include "mcio.h"
 #include "ps1card.h"
 
@@ -534,16 +535,25 @@ static void doSaveMenu(save_list_t * save_list)
 
 static void doMainMenu(void)
 {
+	static const int destinations[] = {MENU_TROPHIES, MENU_USB_SAVES, MENU_HDD_SAVES,
+		MENU_ONLINE_DB, -1, MENU_USER_BACKUP, MENU_SETTINGS, MENU_CREDITS};
+	const int item_count = sizeof(destinations) / sizeof(destinations[0]);
 	// Check the pads.
 	if(orbisPadGetButtonHold(ORBIS_PAD_BUTTON_LEFT))
-		move_selection_back(MENU_CREDITS, 1);
+		move_selection_back(item_count, 1);
 
 	else if(orbisPadGetButtonHold(ORBIS_PAD_BUTTON_RIGHT))
-		move_selection_fwd(MENU_CREDITS, 1);
+		move_selection_fwd(item_count, 1);
 
 	else if (orbisPadGetButtonPressed(ORBIS_PAD_BUTTON_CROSS))
 	{
-		SetMenu(menu_sel+1);
+		if (destinations[menu_sel] < 0)
+		{
+			google_drive_ui_start(GOOGLE_BROWSE);
+			return;
+		}
+		else
+			SetMenu(destinations[menu_sel]);
 		drawScene();
 		return;
 	}
@@ -943,6 +953,7 @@ static void doPatchMenu(void)
 // Resets new frame
 void drawScene(void)
 {
+    if (google_drive_ui_frame()) return;
 	switch (menu_id)
 	{
 		case MENU_MAIN_SCREEN:

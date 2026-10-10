@@ -46,9 +46,9 @@ typedef struct
 
 extern menu_option_t menu_options[];
 extern app_config_t apollo_config;
+int account_id_refresh_live(uint32_t user, uint64_t *account_id, int32_t *native_status);
 
 void music_callback(int sel);
-void update_callback(int sel);
 
 int get_firmware_version(void);
 int save_xml_owner(const char *xmlfile);

@@ -4,6 +4,8 @@
 #include <unistd.h>
 #include <time.h>
 #include <dirent.h>
+#include <errno.h>
+#include <sys/stat.h>
 #include <orbis/SaveData.h>
 #include <sqlite3.h>
 #include <mini18n.h>
@@ -17,6 +19,8 @@
 #include "mcio.h"
 #include "ps1card.h"
 #include "sd.h"
+#include "save_scan_path.h"
+#include "save_unmount.h"
 
 #define UTF8_CHAR_STAR		"\xE2\x98\x85"
 
@@ -30,7 +34,7 @@
 #define CHAR_ICON_WARN		"\x0F"
 
 
-int orbis_SaveDelete(const save_entry_t *save)
+int orbis_SaveDeleteStatus(const save_entry_t *save, int *sdk_status)
 {
 	OrbisSaveDataDelete del;
 	OrbisSaveDataDirName dir;
@@ -46,106 +50,43 @@ int orbis_SaveDelete(const save_entry_t *save)
 	del.dirName = &dir;
 	del.titleId = &title;
 
-	if (sceSaveDataDelete(&del) < 0) {
-		LOG("DELETE_ERROR");
+	int result = sceSaveDataDelete(&del);
+	if (sdk_status) *sdk_status = result;
+	if (result < 0) {
+		LOG("DELETE_ERROR (%X)", result);
 		return 0;
 	}
 
 	return 1;
 }
 
-int orbis_SaveUmount(const char* mountPath)
+int orbis_SaveDelete(const save_entry_t *save)
+{
+	return orbis_SaveDeleteStatus(save, NULL);
+}
+
+int orbis_SaveUmountStatus(const char* mountPath, int *nativeStatus)
 {
 	char mountDir[256];
 
 	snprintf(mountDir, sizeof(mountDir), APOLLO_SANDBOX_PATH, mountPath);
-	int umountErrorCode = umountSave(mountDir, 0, 0);
-	
-	if (umountErrorCode < 0)
+	int umountErrorCode = 0;
+	int unmounted = save_unmount_directory(mountDir, &umountErrorCode);
+	int saved_errno = errno;
+	if (nativeStatus) *nativeStatus = umountErrorCode;
+
+	if (!unmounted)
 	{
 		LOG("UMOUNT_ERROR (%X)", umountErrorCode);
 		notify_popup(NOTIFICATION_ICON_BAN, _("Warning! Save couldn't be unmounted!"));
 	}
-
-	rmdir(mountDir);
-	return (umountErrorCode == SUCCESS);
+	errno = saved_errno;
+	return unmounted;
 }
 
-int orbis_SaveMount(const save_entry_t *save, uint32_t mount_mode, char* mount_path)
+int orbis_SaveUmount(const char* mountPath)
 {
-	char mountDir[256];
-	char keyPath[256];
-	char volumePath[256];
-
-	snprintf(mountDir, sizeof(mountDir), APOLLO_SANDBOX_PATH, save->dir_name);
-	if (mkdirs(mountDir) < 0)
-	{
-		LOG("ERROR: can't create '%s'", mountDir);
-		return 0;
-	}
-
-	if (mount_mode & SAVE_FLAG_TROPHY)
-	{
-		snprintf(keyPath, sizeof(keyPath), TROPHY_PATH_HDD "%s/sealedkey", apollo_config.user_id, save->title_id);
-		snprintf(volumePath, sizeof(volumePath), TROPHY_PATH_HDD "%s/trophy.img", apollo_config.user_id, save->title_id);
-	}
-	else if (mount_mode & SAVE_FLAG_LOCKED)
-	{
-		snprintf(keyPath, sizeof(keyPath), "%s%s.bin", save->path, save->dir_name);
-		snprintf(volumePath, sizeof(volumePath), "%s%s", save->path, save->dir_name);
-	}
-	else
-	{
-		snprintf(keyPath, sizeof(keyPath), SAVES_PATH_HDD "%s/%s.bin", apollo_config.user_id, save->title_id, save->dir_name);
-		snprintf(volumePath, sizeof(volumePath), SAVES_PATH_HDD "%s/sdimg_%s", apollo_config.user_id, save->title_id, save->dir_name);
-	}
-
-	if ((mount_mode & ORBIS_SAVE_DATA_MOUNT_MODE_CREATE2) && (file_exists(keyPath) != SUCCESS))
-	{
-		sqlite3 *db;
-		char *query, dbpath[256];
-
-		LOG("Creating save '%s'...", keyPath);
-		mkdirs(volumePath);
-		if (createSave(volumePath, keyPath, save->blocks) < 0)
-		{
-			LOG("ERROR: can't create '%s'", keyPath);
-			return 0;
-		}
-
-		snprintf(dbpath, sizeof(dbpath), SAVES_DB_PATH, apollo_config.user_id);
-		if ((db = open_sqlite_db(dbpath)) == NULL)
-			return 0;
-
-		query = sqlite3_mprintf("INSERT INTO savedata(title_id, dir_name, main_title, sub_title, detail, tmp_dir_name, is_broken, user_param, blocks, free_blocks, size_kib, mtime, fake_broken, account_id, user_id, faked_owner, cloud_icon_url, cloud_revision, game_title_id) "
-			"VALUES (%Q, %Q, '', '', '', '', 0, 0, %d, %d, %d, strftime('%%Y-%%m-%%dT%%H:%%M:%%S.00Z', CURRENT_TIMESTAMP), 0, %ld, %d, 0, '', 0, %Q);",
-			save->title_id, save->dir_name, save->blocks, save->blocks, (save->blocks*32), apollo_config.account_id, apollo_config.user_id, save->title_id);
-
-		if (sqlite3_exec(db, query, NULL, NULL, NULL) != SQLITE_OK)
-		{
-			LOG("Error inserting '%s': %s", save->title_id, sqlite3_errmsg(db));
-			sqlite3_free(query);
-			sqlite3_close(db);
-			return 0;
-		}
-
-		save_sqlite_db(db, dbpath);
-		sqlite3_free(query);
-		sqlite3_close(db);
-	}
-
-	int mountErrorCode = mountSave(volumePath, keyPath, mountDir);
-	if (mountErrorCode < 0)
-	{
-		LOG("ERROR (%X): can't mount '%s/%s'", mountErrorCode, save->title_id, save->dir_name);
-		rmdir(mountDir);
-		return 0;
-	}
-
-	LOG("'%s/%s' mountPath (%s)", save->title_id, save->dir_name, mountDir);
-	strlcpy(mount_path, save->dir_name, ORBIS_SAVE_DATA_DIRNAME_DATA_MAXSIZE);
-
-	return 1;
+	return orbis_SaveUmountStatus(mountPath, NULL);
 }
 
 int orbis_UpdateSaveParams(const save_entry_t* save, const char* title, const char* subtitle, const char* details, uint32_t userParam)
@@ -171,11 +112,11 @@ int orbis_UpdateSaveParams(const save_entry_t* save, const char* title, const ch
 		return 0;
 	}
 
-	save_sqlite_db(db, dbpath);
+	int db_saved = save_sqlite_db(db, dbpath);
 	sqlite3_free(query);
-	sqlite3_close(db);
+	if (sqlite3_close(db)!=SQLITE_OK) db_saved=0;
 
-	return 1;
+	return db_saved;
 }
 
 /*
@@ -388,6 +329,12 @@ static void _addBackupCommands(save_entry_t* item)
 		cmd = _createCmdCode(PATCH_COMMAND, CHAR_ICON_COPY " ", _("Copy save game to USB"), CMD_CODE_NULL);
 		_createOptions(cmd, _("Copy Save to USB"), CMD_COPY_SAVE_USB);
 		list_append(item->codes, cmd);
+
+		if (item->type == FILE_TYPE_PS4 && !(item->flags & (SAVE_FLAG_TROPHY|SAVE_FLAG_LOCKED)))
+		{
+			cmd = _createCmdCode(PATCH_COMMAND, CHAR_ICON_NET " ", _("Back up to Google Drive"), CMD_UPLOAD_GOOGLE);
+			list_append(item->codes, cmd);
+		}
 
 		if (apollo_config.ftp_url[0])
 		{
@@ -1519,6 +1466,10 @@ static void read_hdd_savegames(const char* userPath, list_t *list, sqlite3 *appd
 	while (sqlite3_step(res) == SQLITE_ROW)
 	{
 		const char* subtitle = (const char*) sqlite3_column_text(res, 5);
+		/* Private app credentials must never enter save export/backup lists. */
+		if (!strcmp((const char*) sqlite3_column_text(res, 0), "PSSY00001") &&
+			!strcmp((const char*) sqlite3_column_text(res, 1), "GoogleAuth"))
+			continue;
 		strncpy(name, (const char*) sqlite3_column_text(res, 2), ORBIS_SAVE_DATA_DETAIL_MAXSIZE);
 		get_appdb_title(appdb, (const char*) sqlite3_column_text(res, 0), name);
 		strcat(name, " - ");
@@ -1664,7 +1615,7 @@ list_t * ReadUsbList(const char* userPath)
 	save_entry_t *item;
 	code_entry_t *cmd;
 	list_t *list;
-	char path[64];
+	char path[SAVE_SCAN_PATH_CAP];
 
 	list = list_alloc();
 
@@ -1695,18 +1646,18 @@ list_t * ReadUsbList(const char* userPath)
 	list_append(item->codes, cmd);
 	list_append(list, item);
 
-	snprintf(path, sizeof(path), "%sPS4/APOLLO/", userPath);
-	read_usb_savegames(path, list);
+	if (save_scan_path(path, userPath, "PS4/APOLLO/"))
+		read_usb_savegames(path, list);
 	read_inner_vmc2_files(list);
 
-	snprintf(path, sizeof(path), "%sPS4/SAVEDATA/", userPath);
-	read_usb_encrypted_savegames(path, list);
+	if (save_scan_path(path, userPath, "PS4/SAVEDATA/"))
+		read_usb_encrypted_savegames(path, list);
 
-	snprintf(path, sizeof(path), "%s%s", userPath, VMC_PS2_PATH_USB);
-	scan_vmc_files(path, NULL, list);
+	if (save_scan_path(path, userPath, VMC_PS2_PATH_USB))
+		scan_vmc_files(path, NULL, list);
 
-	snprintf(path, sizeof(path), "%s%s", userPath, VMC_PS1_PATH_USB);
-	scan_vmc_files(path, NULL, list);
+	if (save_scan_path(path, userPath, VMC_PS1_PATH_USB))
+		scan_vmc_files(path, NULL, list);
 
 	return list;
 }
