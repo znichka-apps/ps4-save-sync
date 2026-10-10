@@ -253,8 +253,7 @@ static int initPad(void)
 static int LoadTextures_Menu(void)
 {
 	texture_mem = malloc(256 * 32 * 4);
-	if (!menu_textures)
-		menu_textures = (png_texture *)calloc(TOTAL_MENU_TEXTURES, sizeof(png_texture));
+	menu_textures = (png_texture *)calloc(TOTAL_MENU_TEXTURES, sizeof(png_texture));
 	
 	if(!texture_mem || !menu_textures)
 		return 0; // fail!
@@ -637,15 +636,6 @@ s32 main(s32 argc, const char* argv[])
 	}
 	startup_marker("menu textures loaded");
 
-	// Packaged images are available here, after the data mount and normal texture setup.
-	// The splash remains usable if the optional logo cannot be decoded or uploaded.
-	if (!LoadMenuTexture(APOLLO_APP_PATH "images/cloud_save_logo.png", cloud_save_logo_png_index))
-		LOG("Cloud save splash logo unavailable; using text fallback");
-	SetExtraSpace(-15);
-	SetCurrentFont(font_adonais_regular);
-	drawSplashLogo();
-	startup_marker("splash presented");
-
 	initLocalization();
 	// Load application settings
 	load_app_settings(&apollo_config);
@@ -669,6 +659,10 @@ s32 main(s32 argc, const char* argv[])
 	}
 
 	// dedicated to Leon & Luna ~ in loving memory
+
+	// Setup font
+	SetExtraSpace(-15);
+	SetCurrentFont(font_adonais_regular);
 
 	registerSpecialChars();
 	initMenuOptions();
@@ -709,8 +703,6 @@ s32 main(s32 argc, const char* argv[])
 			first_frame_presented = 1;
 		}
 	}
-
-	drawEndLogo();
 
     // Join Google worker before shutting down SDL or global libcurl.
     google_drive_shutdown();
