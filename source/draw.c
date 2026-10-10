@@ -29,7 +29,8 @@ int LoadMenuTexture(const char* path, int idx)
 
 	if (!menu_textures[idx].buffer)
 	{
-		LOG("Error Loading texture (%s)!", path);
+		const char* reason = stbi_failure_reason();
+		LOG("Error loading texture (%s): %s", path, reason ? reason : "unknown error");
 		return 0;
 	}
 
@@ -39,14 +40,19 @@ int LoadMenuTexture(const char* path, int idx)
 
 	SDL_Surface* surface = SDL_CreateRGBSurfaceFrom(menu_textures[idx].buffer, menu_textures[idx].width, menu_textures[idx].height, 32, 4 * menu_textures[idx].width,
 												0xFF000000, 0x00FF0000, 0x0000FF00, 0x000000FF);
-
-	menu_textures[idx].texture = SDL_CreateTextureFromSurface(renderer, surface);
-
-	SDL_FreeSurface(surface);
+	if (surface)
+	{
+		menu_textures[idx].texture = SDL_CreateTextureFromSurface(renderer, surface);
+		SDL_FreeSurface(surface);
+	}
 	stbi_image_free(menu_textures[idx].buffer);
-
-	menu_textures[idx].size = menu_textures[idx].width * menu_textures[idx].height * 4;
 	menu_textures[idx].buffer = NULL;
+	if (!menu_textures[idx].texture)
+	{
+		LOG("Error creating texture (%s): %s", path, SDL_GetError());
+		return 0;
+	}
+	menu_textures[idx].size = menu_textures[idx].width * menu_textures[idx].height * 4;
 	return 1;
 }
 
@@ -381,9 +387,23 @@ static void drawStartupIdentity(u8 alpha)
 {
 	DrawTexture(&menu_textures[znichka_icon_png_index], 64, 56, 0,
 		76, 76, 0xFFFFFF00 | alpha);
-	DrawTexture(&menu_textures[cloud_save_logo_png_index],
-		(SCREEN_WIDTH - 900) / 2, (SCREEN_HEIGHT - 550) / 2, 0,
-		900, 550, 0xFFFFFF00 | alpha);
+	if (menu_textures[cloud_save_logo_png_index].texture)
+	{
+		DrawTexture(&menu_textures[cloud_save_logo_png_index],
+			(SCREEN_WIDTH - 900) / 2, (SCREEN_HEIGHT - 550) / 2, 0,
+			900, 550, 0xFFFFFF00 | alpha);
+	}
+	else
+	{
+		SetFontAlign(FONT_ALIGN_SCREEN_CENTER);
+		SetFontColor(APP_FONT_TITLE_COLOR | alpha, 0);
+		SetFontSize(72, 76);
+		DrawString(0, SCREEN_HEIGHT / 2 - 80, "PS4 Cloud Save");
+		SetFontColor(0xE9EEF900 | alpha, 0);
+		SetFontSize(38, 44);
+		DrawString(0, SCREEN_HEIGHT / 2 + 10, "by Znichka");
+		SetFontAlign(FONT_ALIGN_LEFT);
+	}
 }
 
 void drawSplashLogo(void)

@@ -498,6 +498,18 @@ static void terminate(void)
 	sceSystemServiceLoadExec("exit", NULL);
 }
 
+// Keep the last completed startup step available when a console exits early.
+static void startup_marker(const char* stage)
+{
+	FILE* file = fopen(APOLLO_PATH "startup_stage.txt", "w");
+	if (file)
+	{
+		fprintf(file, "%s\n", stage);
+		fclose(file);
+	}
+	LOG("Startup: %s", stage);
+}
+
 static int initInternal(void)
 {
     // load common modules
@@ -581,14 +593,6 @@ s32 main(s32 argc, const char* argv[])
 		return (-1);
 	}
 
-	// Present the splash before the remaining services, fonts and menus initialize.
-	menu_textures = (png_texture *)calloc(TOTAL_MENU_TEXTURES, sizeof(png_texture));
-	if (!menu_textures ||
-		!LoadMenuTexture(APOLLO_APP_PATH "images/znichka_icon.png", znichka_icon_png_index) ||
-		!LoadMenuTexture(APOLLO_APP_PATH "images/cloud_save_logo.png", cloud_save_logo_png_index))
-		return (-1);
-	drawSplashLogo();
-
 	// Initialize jailbreak
 	if (!initialize_jbc() || !initVshDataMount())
 	{
@@ -598,6 +602,7 @@ s32 main(s32 argc, const char* argv[])
 
 	mkdirs(APOLLO_DATA_PATH);
 	mkdirs(APOLLO_LOCAL_CACHE);
+	startup_marker("data directories ready");
 	
 	// Load freetype
 	if (sceSysmoduleLoadModule(ORBIS_SYSMODULE_FREETYPE_OL) < 0)
@@ -630,6 +635,16 @@ s32 main(s32 argc, const char* argv[])
 		LOG("Failed to load menu textures!");
 		return (-1);
 	}
+	startup_marker("menu textures loaded");
+
+	// Packaged images are available here, after the data mount and normal texture setup.
+	// The splash remains usable if the optional logo cannot be decoded or uploaded.
+	if (!LoadMenuTexture(APOLLO_APP_PATH "images/cloud_save_logo.png", cloud_save_logo_png_index))
+		LOG("Cloud save splash logo unavailable; using text fallback");
+	SetExtraSpace(-15);
+	SetCurrentFont(font_adonais_regular);
+	drawSplashLogo();
+	startup_marker("splash presented");
 
 	initLocalization();
 	// Load application settings
@@ -655,16 +670,14 @@ s32 main(s32 argc, const char* argv[])
 
 	// dedicated to Leon & Luna ~ in loving memory
 
-	// Setup font
-	SetExtraSpace(-15);
-	SetCurrentFont(font_adonais_regular);
-
 	registerSpecialChars();
 	initMenuOptions();
+	startup_marker("menu initialized");
 
 	// Start BGM audio thread
 	SDL_CreateThread(&LoadSounds, "audio_thread", NULL);
 
+	int first_frame_presented = 0;
 	while (!close_app)
 	{
 #ifdef APOLLO_ENABLE_LOGGING
@@ -690,6 +703,11 @@ s32 main(s32 argc, const char* argv[])
 #endif
 		// Propagate the updated window to the screen
 		SDL_RenderPresent(renderer);
+		if (!first_frame_presented)
+		{
+			startup_marker("first menu frame presented");
+			first_frame_presented = 1;
+		}
 	}
 
 	drawEndLogo();
