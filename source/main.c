@@ -294,8 +294,7 @@ static int LoadTextures_Menu(void)
 	load_menu_texture(scroll_lock, png);
 	load_menu_texture(help, png);
 	load_menu_texture(znichka_logo, png);
-	if (!LoadMenuTexture(APOLLO_APP_PATH "images/znichka_icon.png", znichka_icon_png_index))
-		LOG("Znichka splash icon unavailable; using text fallback");
+	load_menu_texture(znichka_icon, png);
 	load_menu_texture(tag_lock, png);
 	load_menu_texture(tag_own, png);
 	load_menu_texture(tag_vmc, png);
@@ -636,10 +635,6 @@ s32 main(s32 argc, const char* argv[])
 		return (-1);
 	}
 	startup_marker("menu textures loaded");
-	startup_marker("cloud splash load start");
-	if (!LoadMenuTexture(APOLLO_APP_PATH "images/cloud_save_logo.png", cloud_save_logo_png_index))
-		LOG("Cloud save splash logo unavailable; using text fallback");
-	startup_marker("splash assets checked");
 
 	initLocalization();
 	// Load application settings
@@ -672,9 +667,6 @@ s32 main(s32 argc, const char* argv[])
 	registerSpecialChars();
 	initMenuOptions();
 	startup_marker("menu initialized");
-	startup_marker("splash draw start");
-	drawSplashLogo();
-	startup_marker("splash presented");
 
 	// Start BGM audio thread
 	SDL_CreateThread(&LoadSounds, "audio_thread", NULL);
@@ -712,7 +704,6 @@ s32 main(s32 argc, const char* argv[])
 		}
 	}
 
-    drawEndLogo();
     // Join Google worker before shutting down SDL or global libcurl.
     google_drive_shutdown();
     // Cleanup resources

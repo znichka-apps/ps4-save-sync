@@ -90,7 +90,6 @@ enum texture_index
 	cheat_png_index,
 	znichka_logo_png_index,
 	znichka_icon_png_index,
-	cloud_save_logo_png_index,
 
 	TOTAL_MENU_TEXTURES
 };
@@ -199,8 +198,6 @@ void LoadVmcTexture(int width, int height, uint8_t* icon);
 void initMenuOptions(void);
 
 void drawScene(void);
-void drawSplashLogo(void);
-void drawEndLogo(void);
 
 int load_app_settings(app_config_t* config);
 int save_app_settings(app_config_t* config);
