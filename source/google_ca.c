@@ -80,9 +80,9 @@ CURLcode google_ca_ssl_context(CURL *curl, void *ssl_context, void *data)
         if (ca) { ca->problem = "CA TLS context setup refused"; ca->callback_result = CURLE_SSL_CACERT_BADFILE; }
         return CURLE_SSL_CACERT_BADFILE;
     }
-    ca->callback_result = curl_easy_setopt(curl, CURLOPT_FORBID_REUSE, 1L);
-    if (ca->callback_result != CURLE_OK) { ca->problem = "TLS connection reuse guard failed"; return ca->callback_result; }
-    /* Fresh Google handles have no CRL option. Change only trust anchors; leave
+    /* Reuse is disabled on the easy handle before curl_easy_perform. Calling
+       curl_easy_setopt on that handle from this callback is reentrant. Fresh
+       Google handles have no CRL option. Change only trust anchors; leave
        curl's auth mode, verification callbacks, hostname, profile, and RNG intact. */
     mbedtls_ssl_conf_ca_chain((mbedtls_ssl_config*)ssl_context, &ca->chain, NULL);
     ca->attached = 1;

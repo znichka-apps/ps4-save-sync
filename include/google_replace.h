@@ -22,7 +22,8 @@ enum {
     GOOGLE_REPLACE_SUCCESS,
     GOOGLE_REPLACE_CANCELLED,
     GOOGLE_REPLACE_ROLLED_BACK,
-    GOOGLE_REPLACE_NEEDS_RECOVERY
+    GOOGLE_REPLACE_NEEDS_RECOVERY,
+    GOOGLE_REPLACE_TARGET_PRESENT /* Journal cannot prove which save is present. */
 };
 
 /* Pending returns 1 for a recoverable journal, 0 for none, -1 for unsafe/ambiguous state. */

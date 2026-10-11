@@ -118,6 +118,16 @@ int main(void) {
             assert(strstr(job.backup.diagnostic,"op=")&&strstr(job.backup.diagnostic,"zip=")&&
                 strstr(job.backup.diagnostic,"native=")); }
     }
+    /* A stopped transfer must leave no ready archive and a fresh attempt
+       against the same Drive item must validate independently. */
+    mode=1; stop=0; requests=chunks=0;
+    google_remote_backup interrupted=remote;
+    assert(google_download_run(&interrupted,&io)==GOOGLE_UPLOAD_FAILED);
+    assert(!interrupted.backup.temp_dir[0]);
+    mode=0; requests=chunks=0;
+    assert(google_download_run(&interrupted,&io)==GOOGLE_UPLOAD_SUCCESS);
+    assert(chunks>1 && !access(interrupted.backup.archive,F_OK));
+    assert(google_backup_cleanup(&interrupted.backup));
     mode=0; stop=0; requests=chunks=0;
     assert(google_download_recheck(&remote,&io) && requests==1 && !chunks);
     saved=cJSON_Duplicate(metadata,1); change("gameName","Changed game");

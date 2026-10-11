@@ -602,6 +602,10 @@ static int worker(void *unused)
         if (blocked) backup.mount_blocked=1;
         message(result==GOOGLE_REPLACE_ROLLED_BACK?
             "Recovery complete; prior save unmounted. Both ZIPs retained.":
+            result==GOOGLE_REPLACE_SUCCESS?
+            "Recovery confirmed Replace completed and save unmounted. Both ZIPs retained.":
+            result==GOOGLE_REPLACE_TARGET_PRESENT?
+            "Recovery paused: target exists but journal cannot verify it. Do not replace it; inspect save and retained ZIPs.":
             blocked?"Recovery mount state uncertain. Stop save operations; journal and ZIPs retained.":
             "Recovery failed. Target may be partial; journal and both ZIPs retained. Retry after restart.");
         goto done;
@@ -664,6 +668,8 @@ static int worker(void *unused)
                     "Replace failed; prior save restored and unmounted. Journal and ZIPs retained.":
                     result==GOOGLE_REPLACE_NEEDS_RECOVERY?
                     "Replace failed; recovery pending. Target may be partial. Journal and ZIPs retained.":
+                    result==GOOGLE_REPLACE_TARGET_PRESENT?
+                    "Replace failed; target present but unverified. Inspect it before recovery. Journal and ZIPs retained.":
                     result==GOOGLE_REPLACE_CANCELLED?
                     "Replace cancelled before target change. Journal and ZIPs retained where created.":
                     "Replace refused before target change. Check details; ZIPs retained.");

@@ -10,9 +10,19 @@
 
 static google_backup selected;
 static int target, validate_fail, stage_fail, upload_fail, commit_fail, delete_fail;
-static int import_fail, import_mount_fail, import_unmount_fail, create_fail, rollback_fail, cancel_now, cancel_on_upload;
+static int import_fail, import_mount_fail, import_unmount_fail, create_fail, rollback_fail, import_ghost_success, cancel_now, cancel_on_upload;
+static int fail_completion_write, completed_renames;
 static int stage_calls, upload_calls, delete_calls, import_calls;
 enum { ABSENT, OLD, NEW, PARTIAL };
+int __real_rename(const char *,const char *);
+int __wrap_rename(const char *from,const char *to)
+{
+    if (target==NEW && strstr(from,"journal.tmp") && strstr(to,"/journal")) {
+        completed_renames++;
+        if (fail_completion_write && completed_renames==2) { errno=EIO; return -1; }
+    }
+    return __real_rename(from,to);
+}
 int restore_fs_init(int *error) { *error=0; return 1; }
 int restore_fs_lstat(const char *path,struct stat *st) { return lstat(path,st); }
 int google_restore_validate(google_backup *b,int (*cancel)(void*),void *data)
@@ -70,8 +80,7 @@ static int import_archive(void *unused,google_backup *b,int recovery)
     (void)unused;import_calls++;
     char phase[112];
     assert(google_replace_last_phase(42,phase,sizeof(phase)));
-    assert(recovery?(!strcmp(phase,"rollback target delete: result=1") ||
-                     !strcmp(phase,"rollback target presence: result=0")):
+    assert(recovery?!strcmp(phase,"rollback target presence: result=0"):
                     !strcmp(phase,"import: before"));
     assert(target==ABSENT);
     if (!recovery && create_fail) return 0;
@@ -82,8 +91,9 @@ static int import_archive(void *unused,google_backup *b,int recovery)
         target=PARTIAL; b->mount_blocked=1; errno=ENOENT; return 0;
     }
     if ((recovery && rollback_fail) || (!recovery && import_fail)) {
-        target=PARTIAL;return 0;
+        target=recovery?ABSENT:PARTIAL;return 0;
     }
+    if (!recovery && import_ghost_success) return 1;
     assert(!strcmp(b->md5,recovery?"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"));
     target=recovery?OLD:NEW;return 1;
 }
@@ -115,7 +125,8 @@ static void setup(void)
     strcpy(selected.utc,"2026-10-05T00:00:00Z");selected.size=1;selected.user=42;
     FILE *f=fopen(selected.archive,"wb"); assert(f);assert(fputc('S',f)!='\0'&&!fclose(f));
     target=OLD;validate_fail=stage_fail=upload_fail=commit_fail=delete_fail=0;
-    import_fail=import_mount_fail=import_unmount_fail=create_fail=rollback_fail=cancel_now=cancel_on_upload=0;
+    import_fail=import_mount_fail=import_unmount_fail=create_fail=rollback_fail=import_ghost_success=cancel_now=cancel_on_upload=0;
+    fail_completion_write=completed_renames=0;
     stage_calls=upload_calls=delete_calls=import_calls=0;
 }
 static void assert_retained(void)
@@ -169,12 +180,13 @@ int main(void)
     cancel_now=0;
     assert(google_replace_recover(42,&io)==GOOGLE_REPLACE_ROLLED_BACK && target==OLD);
     setup();delete_fail=1;
-    assert(google_replace_start(&selected,&io)==GOOGLE_REPLACE_ROLLED_BACK && target==OLD && delete_calls==2);
-    assert_phase_contains("rollback target delete: result=1");
-    assert_retained();assert(google_replace_pending(42,NULL)==0);
+    assert(google_replace_start(&selected,&io)==GOOGLE_REPLACE_TARGET_PRESENT && target==PARTIAL && delete_calls==1);
+    assert(google_replace_recover(42,&io)==GOOGLE_REPLACE_TARGET_PRESENT && target==PARTIAL && delete_calls==1);
+    assert_retained();assert(google_replace_pending(42,NULL)==1);
     setup();import_fail=1;
-    assert(google_replace_start(&selected,&io)==GOOGLE_REPLACE_ROLLED_BACK && target==OLD && import_calls==2);
-    assert_retained();assert(google_replace_pending(42,NULL)==0);
+    assert(google_replace_start(&selected,&io)==GOOGLE_REPLACE_TARGET_PRESENT && target==PARTIAL && import_calls==1);
+    assert(google_replace_recover(42,&io)==GOOGLE_REPLACE_TARGET_PRESENT && target==PARTIAL && import_calls==1);
+    assert_retained();assert(google_replace_pending(42,NULL)==1);
     setup();import_mount_fail=1;
     assert(google_replace_start(&selected,&io)==GOOGLE_REPLACE_NEEDS_RECOVERY);
     assert(selected.mount_blocked && target==ABSENT && import_calls==1 && delete_calls==1);
@@ -186,20 +198,33 @@ int main(void)
     assert_retained();assert(google_replace_pending(42,NULL)==1);
     assert_phase_contains("import: after failed");
     assert_phase_missing("rollback: before");
-    setup();create_fail=1;
-    assert(google_replace_start(&selected,&io)==GOOGLE_REPLACE_ROLLED_BACK && target==OLD && import_calls==2);
-    setup();import_fail=rollback_fail=1;
-    assert(google_replace_start(&selected,&io)==GOOGLE_REPLACE_NEEDS_RECOVERY && target==PARTIAL);
-    assert(google_replace_last_phase(42,phase,sizeof(phase)) && !strcmp(phase,"rollback: after failed"));
-    assert_phase_contains("rollback ZIP validation: result=1");
-    assert_phase_contains("rollback journal checkpoint: result=1 errno=0");
-    assert_phase_contains("rollback target presence: result=1");
-    assert_phase_contains("rollback ZIP import: result=0");
-    assert_phase_contains("rollback failure checkpoint: result=1 errno=0");
-    assert_retained();assert(google_replace_pending(42,NULL)==1);
-    rollback_fail=0;
+    assert(google_replace_recover(42,&io)==GOOGLE_REPLACE_TARGET_PRESENT && target==PARTIAL);
+    assert(delete_calls==1 && import_calls==1);
+    setup();import_mount_fail=1;
+    assert(google_replace_start(&selected,&io)==GOOGLE_REPLACE_NEEDS_RECOVERY && target==ABSENT);
+    import_mount_fail=0;
     assert(google_replace_recover(42,&io)==GOOGLE_REPLACE_ROLLED_BACK && target==OLD);
     assert(google_replace_pending(42,NULL)==0);
+    setup();create_fail=1;
+    assert(google_replace_start(&selected,&io)==GOOGLE_REPLACE_ROLLED_BACK && target==OLD && import_calls==2);
+    setup();import_ghost_success=1;
+    assert(google_replace_start(&selected,&io)==GOOGLE_REPLACE_ROLLED_BACK && target==OLD && import_calls==2);
+    assert_phase_contains("import verification: target absent or uncertain");
+    setup();import_fail=rollback_fail=1;
+    assert(google_replace_start(&selected,&io)==GOOGLE_REPLACE_TARGET_PRESENT && target==PARTIAL);
+    assert(google_replace_last_phase(42,phase,sizeof(phase)) && !strcmp(phase,"rollback: target present; identity uncertain"));
+    assert_phase_contains("rollback ZIP validation: result=1");
+    assert_phase_contains("rollback: target present; identity uncertain");
+    assert_phase_contains("rollback preflight presence: result=1");
+    assert_retained();assert(google_replace_pending(42,NULL)==1);
+    rollback_fail=0;
+    assert(google_replace_recover(42,&io)==GOOGLE_REPLACE_TARGET_PRESENT && target==PARTIAL);
+    assert(google_replace_pending(42,NULL)==1);
+    setup();fail_completion_write=1;
+    assert(google_replace_start(&selected,&io)==GOOGLE_REPLACE_NEEDS_RECOVERY && target==NEW);
+    assert(completed_renames==2 && google_replace_pending(42,NULL)==1);
+    assert(google_replace_recover(42,&io)==GOOGLE_REPLACE_SUCCESS && target==NEW);
+    assert(delete_calls==1 && import_calls==1 && google_replace_pending(42,NULL)==0);
     setup();
     assert(google_replace_start(&selected,&io)==GOOGLE_REPLACE_SUCCESS && target==NEW && import_calls==1);
     assert(google_replace_last_phase(42,phase,sizeof(phase)) && !strcmp(phase,"journal cleanup: after retained"));

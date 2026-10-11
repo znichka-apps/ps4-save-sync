@@ -139,11 +139,13 @@ static uint64_t u32(const unsigned char *p) { return u16(p) | (uint64_t)u16(p+2)
 /* Check raw central/local names as well: C string APIs can hide embedded NULs.
    This v1 reader deliberately rejects ZIP64, multi-disk and trailing data. */
 static int raw_names(FILE *f, int (*cancel)(void*), void *data) {
-    unsigned char tail[65557], header[46], local[30], name[1024], local_name[1024];
+    unsigned char *tail=malloc(65557);
+    unsigned char header[46], local[30], name[1024], local_name[1024];
     int ok=0;
+    if (!tail) return 0;
     if (fseeko(f,0,SEEK_END)) goto done;
     off_t length=ftello(f); if (length<22) goto done;
-    size_t size=length>(off_t)sizeof(tail)?sizeof(tail):(size_t)length;
+    size_t size=length>65557?65557:(size_t)length;
     if (fseeko(f,length-size,SEEK_SET) || fread(tail,1,size,f)!=size) goto done;
     size_t end=size-22;
     while (memcmp(tail+end,"PK\005\006",4)) { if (!end) goto done; end--; }
@@ -169,10 +171,12 @@ static int raw_names(FILE *f, int (*cancel)(void*), void *data) {
         position+=46+n+extra+comment;
     }
     ok=position==offset+central;
-done: return ok;
+done: free(tail); return ok;
 }
 static int zip_entries(zip_t *z, const google_backup *b, int (*cancel)(void*), void *data, int *error) {
     int ok=0, files=0, sfo=0; uint64_t expanded=0;
+    unsigned char *buffer=malloc(16384);
+    if (!buffer) goto done;
     zip_int64_t count=zip_get_num_entries(z,0);
     if (count<=0 || count>4096) goto done;
     for (zip_uint64_t i=0;i<(zip_uint64_t)count;i++) {
@@ -204,8 +208,8 @@ static int zip_entries(zip_t *z, const google_backup *b, int (*cancel)(void*), v
         char required[128]; snprintf(required,sizeof(required),"%s/sce_sys/param.sfo",b->directory);
         if (!strcmp(name,required) && st.size) sfo=1;
         zip_file_t *f=zip_fopen_index(z,i,0); if (!f) goto done;
-        unsigned char buffer[16384]; zip_int64_t n; uint64_t read=0; int valid=1;
-        while ((n=zip_fread(f,buffer,sizeof(buffer)))>0) {
+        zip_int64_t n; uint64_t read=0; int valid=1;
+        while ((n=zip_fread(f,buffer,16384))>0) {
             if (cancel(data) || (uint64_t)n>st.size-read) { valid=0; break; }
             read+=(uint64_t)n;
         }
@@ -219,7 +223,7 @@ done:
         *error=zip_error_code_zip(zip_get_error(z));
         if (!*error) *error=cancel(data)?ZIP_ER_CANCELLED:ZIP_ER_INCONS;
     }
-    zip_discard(z); return ok;
+    free(buffer); zip_discard(z); return ok;
 }
 int google_download_zip_fd(const google_backup *b, int fd, int (*cancel)(void*), void *data, int *error) {
     *error=0;
@@ -298,6 +302,7 @@ int google_download_run(google_remote_backup *remote, const google_upload_io *io
     snprintf(url,sizeof(url),FILES "/%s?alt=media",remote->id);
     google_upload_request q={.method="GET",.url=url,.download=fp,.total=b->size};
     op=105; stage="Drive media transfer"; call_name="files.get media/fflush";
+    google_restore_log(stage,op,0,0,0,"files.get media start",0);
     if (!call(io,&q,&r) || r.downloaded!=b->size || fflush(fp) || ferror(fp)) { failure_errno=errno; goto done; }
     google_restore_log(stage,op,0,0,0,call_name,0);
     op=106; stage="archive close"; call_name="fclose";

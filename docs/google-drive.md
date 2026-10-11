@@ -461,18 +461,21 @@ control and available storage.
 Only after the rollback upload and a durable journal checkpoint does the
 worker disable cancellation, delete the target with Apollo's save-data delete
 operation, confirm absence, and run the same staged empty-slot import used by
-the working restore path. Success requires a checked unmount and a durable
-completion checkpoint. If delete or import fails, the worker attempts to
-delete any partial target and import the verified rollback ZIP into an empty
-slot. This can also fail. No automatic recursion over save files or direct
+the working restore path. Success requires a checked unmount, a confirmed
+present target, and a durable verified checkpoint before the completion
+checkpoint. If delete or import fails and the target is absent, the worker
+imports the verified rollback ZIP into the empty slot. If a target is present,
+the worker preserves it and reports that its contents cannot be identified
+from presence alone. No automatic recursion over save files or direct
 key/volume/database deletion is used.
 
 An interrupted or failed recovery leaves the journal and both ZIPs intact.
 On reopening Google Drive, the panel shows **Recovery pending**; R1 explicitly
-retries rollback from the retained local ZIP without network access. Recovery
-can replace a save that was fully imported just before a power loss but before
-the completion checkpoint. Do not assume either result until the disposable
-save has been inspected and loaded in the game. If the journal cannot be
+checks the retained journal and rollback ZIP without network access. A verified
+checkpoint can be completed without changing the target. If deletion has begun
+and a target is present without that checkpoint, recovery stops and preserves
+the target; it may be old, partial or complete. Inspect it and the retained
+ZIPs before any manual action. If the journal cannot be
 validated or a save cannot be unmounted, further Google save operations are
 blocked; restart and investigate the preserved transaction. The OpenOrbis
 backup-related declarations and link stubs do not establish transactional
@@ -480,7 +483,7 @@ firmware behavior, so this path makes no atomicity or guaranteed-recovery claim.
 
 The per-user phase log at `/data/ps4-save-sync/replace/phase-<user-id>.log`
 uses `fsync` for each successfully written record. During rollback it records the ZIP validation result,
-journal checkpoint, target presence result, delete result, and import result.
+journal checkpoint, target presence result, and import result.
 The PS4 adapter also records the numeric `sceSaveDataDelete` status and the
 post-delete absence check separately. Import failures include the restore
 diagnostic when available (operation, errno, and ZIP status); a failed unmount
@@ -528,15 +531,16 @@ including recovery retry and controlled failure injection, remains pending.
    progress, and reboot the console to check it again. Verify both ZIPs and the
    completed journal remain locally, and the rollback file remains on Drive.
 5. With another disposable save, inject a controlled delete or import failure.
-   Verify the app either restores and unmounts the old progress or shows
-   **Recovery pending** with both ZIPs and journal retained. If pending, restart
-   the app, press R1 to retry local rollback, then verify the old progress in
-   game. Repeat with a failed rollback and retry after fixing the fault.
+   If the target is absent, verify rollback imports and unmounts the old save.
+   If a target exists, verify the app reports it as unverified and leaves it
+   untouched. Confirm the journal and both ZIPs remain. Repeat R1 recovery and
+   confirm it still does not delete or overwrite the present target.
 6. For an interruption test, use only the independently backed-up disposable
    save. Interrupt during delete/import, reboot, then check for **Recovery
-   pending** and use R1. Recovery can fail or restore old progress after the
-   new data had fully copied; inspect the save and the retained files before
-   any further operation. Never use this test on the only copy of valued data.
+   pending** and use R1. If the target is absent, rollback may restore old
+   progress. If it is present without a verified checkpoint, recovery must
+   preserve it and report uncertainty. Inspect the save and retained files
+   before any further operation. Never use this test on the only copy of valued data.
 
 ## Broader disposable-save restore and stress tests on PS4 (pending)
 
