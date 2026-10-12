@@ -12,6 +12,7 @@ typedef struct {
     int parser_called, parser_result, loaded, attached;
     CURLcode callback_result;
     const char *problem;
+    int media;
 } google_ca_context;
 
 int google_ca_backend_supported(void);

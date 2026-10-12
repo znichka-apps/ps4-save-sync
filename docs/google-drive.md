@@ -39,6 +39,16 @@ on-screen error and check `/data/ps4-save-sync/google_restore.log`; retain the
 downloaded ZIP. If recovery is pending, use **R1** to retry it before another
 save operation. Do not use a backup's account ID or zero as a substitute.
 
+Each download attempt truncates this log and starts with an `attempt=` header.
+Transfer records include curl result, HTTP status, and byte count; callback
+records in the main log are limited to the first four calls and powers of two.
+The fixed-size `google_restore.log.boundary` file records the latest callback
+entry or exit and is synced on each update; collect it with the main log after
+a crash. A failed or cancelled transfer leaves its private ZIP in the cache for
+diagnosis, while the app never offers that ZIP for restore. Keep a copy of the
+log and ZIP before starting another attempt, because the next attempt starts a
+new log.
+
 ## Console test status
 
 The owner confirmed Google connection, Drive `files.list`, refresh after a full
@@ -48,6 +58,15 @@ confirmed browsing and downloaded-backup validation on PS4. After matching the
 offline Account IDs on both PS4 profiles, the owner confirmed a successful
 cross-console empty-slot restore and a successful **△ Replace**. The restored
 game progress loaded.
+
+Those confirmations are from older builds. PS4 Drive media downloads crashed
+with CE-34878-0 after `files.get media start`. The first local PKG with transfer
+diagnostics crashed before the menu, and its old logs did not describe that
+launch. A launch-only PKG with the app and SDL2 rebuilt using CI's LLVM 12 now
+writes `/data/ps4-save-sync/startup_probe.txt` with a build and run ID, starting
+at `main`; it also sends checkpoints to kernel debug output before file logging
+is available. This build has not passed a real PS4 launch or download test, so
+both crashes remain open.
 
 Recovery retry, power-loss interruption, and controlled failure-injection tests
 remain unverified on PS4. The broader disposable-save and stress test checklists

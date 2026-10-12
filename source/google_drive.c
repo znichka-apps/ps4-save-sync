@@ -40,22 +40,59 @@ static char browser_folder[129], browser_token[512];
 static uint32_t browser_user;
 static google_remote_backup selected_backup;
 static int selected_ready;
-typedef struct { FILE *file; uint64_t count, limit; } download_stream;
+typedef struct { FILE *file; uint64_t count, limit; unsigned callbacks; int write_error; } download_stream;
+static int trace_callback(unsigned n) { return n<=4 || (n & (n-1))==0; }
+static void media_trace(const char *step, CURLcode result, long status, uint64_t bytes)
+{
+    char detail[112];
+    snprintf(detail,sizeof(detail),"%s curl=%d http=%ld bytes=%llu",step,(int)result,status,
+        (unsigned long long)bytes);
+    google_restore_log("Drive media transfer",105,0,0,0,detail,0);
+}
+static void media_boundary(const char *step, CURLcode result, uint64_t bytes)
+{
+    google_restore_boundary(step,(int)result,0,(unsigned long long)bytes);
+}
 static size_t download_write(void *buffer, size_t size, size_t count, void *data)
 {
     download_stream *s = data;
-    if (SDL_AtomicGet(&cancelled) || (size && count > SIZE_MAX / size)) return 0;
+    unsigned callback=++s->callbacks;
+    int trace=trace_callback(callback);
+    media_boundary("write callback enter",CURLE_OK,s->count);
+    if (trace) media_trace("write callback enter",CURLE_OK,0,s->count);
+    if (SDL_AtomicGet(&cancelled) || (size && count > SIZE_MAX / size)) {
+        media_boundary("write callback abort",CURLE_ABORTED_BY_CALLBACK,s->count);
+        if (trace) media_trace("write callback abort",CURLE_ABORTED_BY_CALLBACK,0,s->count);
+        return 0;
+    }
     size_t n = size * count;
-    if (n > s->limit - s->count) return 0;
+    if (s->count > s->limit || n > s->limit - s->count) {
+        media_boundary("write callback limit",CURLE_WRITE_ERROR,s->count);
+        if (trace) media_trace("write callback limit",CURLE_WRITE_ERROR,0,s->count);
+        return 0;
+    }
+    media_boundary("fwrite begin",CURLE_OK,s->count);
+    if (trace) media_trace("fwrite begin",CURLE_OK,0,s->count);
     size_t written = fwrite(buffer,1,n,s->file);
+    if (written!=n || ferror(s->file)) s->write_error=errno ? errno : EIO;
     s->count += written;
+    media_boundary("fwrite end",written==n?CURLE_OK:CURLE_WRITE_ERROR,s->count);
+    if (trace || written!=n) media_trace("fwrite end",written==n?CURLE_OK:CURLE_WRITE_ERROR,0,s->count);
+    media_boundary("progress mutex begin",CURLE_OK,s->count);
+    if (trace) media_trace("progress mutex begin",CURLE_OK,0,s->count);
     SDL_LockMutex(lock); state.completed_bytes = s->count; state.total_bytes = s->limit; SDL_UnlockMutex(lock);
+    media_boundary("progress mutex end",CURLE_OK,s->count);
+    if (trace) media_trace("progress mutex end",CURLE_OK,0,s->count);
+    media_boundary("write callback return",written==n?CURLE_OK:CURLE_WRITE_ERROR,s->count);
+    if (trace) media_trace("write callback return",written==n?CURLE_OK:CURLE_WRITE_ERROR,0,s->count);
     return written;
 }
 
 typedef struct {
     const google_upload_request *request;
     uint64_t remaining;
+    unsigned progress_callbacks;
+    download_stream *sink;
 } upload_stream;
 static size_t stream_read(void *buffer, size_t size, size_t count, void *data)
 {
@@ -73,7 +110,14 @@ static size_t stream_read(void *buffer, size_t size, size_t count, void *data)
 static size_t upload_header(void *buffer, size_t size, size_t count, void *data)
 {
     google_upload_response *r = data;
-    if (size && count > SIZE_MAX / size) return 0;
+    int trace=r->media && trace_callback(++r->header_callbacks);
+    if (r->media) media_boundary("header callback enter",CURLE_OK,r->downloaded);
+    if (trace) media_trace("header callback enter",CURLE_OK,0,r->downloaded);
+    if (size && count > SIZE_MAX / size) {
+        if (r->media) media_boundary("header callback abort",CURLE_WRITE_ERROR,r->downloaded);
+        if (trace) media_trace("header callback abort",CURLE_WRITE_ERROR,0,r->downloaded);
+        return 0;
+    }
     size_t n = size * count;
     const char *line = buffer;
     if (n >= 5 && !strncmp(line, "HTTP/", 5)) {
@@ -89,7 +133,20 @@ static size_t upload_header(void *buffer, size_t size, size_t count, void *data)
         if (out[0] || end - skip >= capacity || memchr(line + skip,0,end-skip)) r->invalid_headers = 1;
         else { memcpy(out,line+skip,end-skip); out[end-skip] = 0; }
     }
+    if (r->media) media_boundary("header callback return",CURLE_OK,r->downloaded);
+    if (trace) media_trace("header callback return",CURLE_OK,0,r->downloaded);
     return n;
+}
+
+static CURLcode tls_callback(CURL *curl, void *context, void *data)
+{
+    google_ca_context *ca=data;
+    if (ca && ca->media) media_boundary("TLS callback enter",CURLE_OK,0);
+    if (ca && ca->media) media_trace("TLS callback enter",CURLE_OK,0,0);
+    CURLcode result=google_ca_ssl_context(curl,context,data);
+    if (ca && ca->media) media_boundary("TLS callback return",result,0);
+    if (ca && ca->media) media_trace("TLS callback return",result,0,0);
+    return result;
 }
 
 static void wipe(void *p, size_t n)
@@ -225,13 +282,20 @@ static int progress(void *p, curl_off_t a, curl_off_t b, curl_off_t c, curl_off_
 {
     (void)a; (void)b; (void)c;
     upload_stream *stream = p;
+    int media=stream && stream->request && stream->request->download;
+    int trace=media && trace_callback(++stream->progress_callbacks);
+    if (media) media_boundary("progress callback enter",CURLE_OK,stream->sink->count);
+    if (trace) media_trace("progress callback enter",CURLE_OK,0,stream->sink->count);
     if (stream && stream->request->file) {
         SDL_LockMutex(lock);
         state.completed_bytes = stream->request->offset + (d > 0 ? (uint64_t)d : 0);
         state.total_bytes = stream->request->total;
         SDL_UnlockMutex(lock);
     }
-    return SDL_AtomicGet(&cancelled);
+    int stopped=SDL_AtomicGet(&cancelled);
+    if (media) media_boundary("progress callback return",stopped?CURLE_ABORTED_BY_CALLBACK:CURLE_OK,stream->sink->count);
+    if (trace) media_trace("progress callback return",stopped?CURLE_ABORTED_BY_CALLBACK:CURLE_OK,0,stream->sink->count);
+    return stopped;
 }
 
 /* Fresh handles, HTTPS only, no redirects, no verbose output, bounded responses. */
@@ -241,16 +305,19 @@ static cJSON *request_extended(const char *url, const char *form, const char *ac
     CURL *curl = curl_easy_init();
     struct curl_slist *headers = NULL;
     response_buffer b = {calloc(1, RESPONSE_CAP + 1), 0};
-    char auth[TOKEN_CAP + 32] = {0};
+    char *auth = NULL;
     /* Stack lifetime includes easy_cleanup; this is never emitted for OAuth,
        refresh, or authenticated Drive requests. */
     char error[CURL_ERROR_SIZE] = {0};
     int discovery = !form && !access && !strcmp(url, DISCOVERY_URL);
     CURLcode result = CURLE_OK;
     google_ca_context ca_context;
-    upload_stream stream = {upload, upload ? upload->length : 0};
-    download_stream sink = {upload ? upload->download : NULL, 0, upload ? upload->total : 0};
+    upload_stream stream = {upload, upload ? upload->length : 0, 0, NULL};
+    download_stream sink = {upload ? upload->download : NULL, 0, upload ? upload->total : 0, 0, 0};
+    stream.sink=&sink;
     google_ca_init(&ca_context);
+    ca_context.media=sink.file!=NULL;
+    if (sink.file) media_trace("curl init end",curl?CURLE_OK:CURLE_OUT_OF_MEMORY,0,0);
     ca_request_failed = 0;
     const char *failure = NULL, *failed_option = NULL;
     cJSON *json = NULL;
@@ -259,7 +326,9 @@ static cJSON *request_extended(const char *url, const char *form, const char *ac
     headers = curl_slist_append(NULL, sink.file ? "Accept: application/zip" : "Accept: application/json");
     if (!headers) { result = CURLE_OUT_OF_MEMORY; failure = "initialization"; goto done; }
     if (access) {
-        snprintf(auth, sizeof(auth), "Authorization: Bearer %s", access);
+        auth=calloc(1,TOKEN_CAP+32);
+        if (!auth) { result=CURLE_OUT_OF_MEMORY; failure="initialization"; goto done; }
+        snprintf(auth,TOKEN_CAP+32,"Authorization: Bearer %s",access);
         struct curl_slist *next = curl_slist_append(headers, auth);
         if (!next) { result = CURLE_OUT_OF_MEMORY; goto done; }
         headers = next;
@@ -284,7 +353,9 @@ static cJSON *request_extended(const char *url, const char *form, const char *ac
             if (!next) { result = CURLE_OUT_OF_MEMORY; goto done; } headers = next;
         }
     }
-#define OPT(k,v) do { result = curl_easy_setopt(curl, k, v); \
+#define OPT(k,v) do { if (sink.file) media_trace(#k " begin",CURLE_OK,0,sink.count); \
+    result = curl_easy_setopt(curl, k, v); \
+    if (sink.file) media_trace(#k " end",result,0,sink.count); \
     if (result != CURLE_OK) { failure = "setup"; failed_option = #k; \
         if (k == CURLOPT_SSL_CTX_FUNCTION || k == CURLOPT_SSL_CTX_DATA || \
             k == CURLOPT_CAINFO || k == CURLOPT_CAPATH || k == CURLOPT_FRESH_CONNECT || \
@@ -292,7 +363,9 @@ static cJSON *request_extended(const char *url, const char *form, const char *ac
             ca_request_failed = 1; ca_context.problem = "TLS CA option setup failed"; } \
         goto done; } } while (0)
     if (discovery) { OPT(CURLOPT_ERRORBUFFER, error); }
+    if (sink.file) media_trace("CA load begin",CURLE_OK,0,0);
     result = google_ca_load(&ca_context);
+    if (sink.file) media_trace("CA load end",result,0,0);
     if (result != CURLE_OK) { failure = "CA loading"; ca_request_failed = 1; goto done; }
     OPT(CURLOPT_URL, url);
     OPT(CURLOPT_PROTOCOLS, (long)CURLPROTO_HTTPS);
@@ -303,7 +376,7 @@ static cJSON *request_extended(const char *url, const char *form, const char *ac
     /* NULL skips only mbedTLS's file/path loaders, not peer/hostname checks. */
     OPT(CURLOPT_CAINFO, NULL);
     OPT(CURLOPT_CAPATH, NULL);
-    OPT(CURLOPT_SSL_CTX_FUNCTION, google_ca_ssl_context);
+    OPT(CURLOPT_SSL_CTX_FUNCTION, tls_callback);
     OPT(CURLOPT_SSL_CTX_DATA, &ca_context);
     OPT(CURLOPT_FRESH_CONNECT, 1L);
     OPT(CURLOPT_FORBID_REUSE, 1L);
@@ -328,6 +401,7 @@ static cJSON *request_extended(const char *url, const char *form, const char *ac
     OPT(CURLOPT_XFERINFOFUNCTION, progress);
     OPT(CURLOPT_XFERINFODATA, upload ? &stream : NULL);
     if (upload) {
+        if (reply) reply->media=sink.file!=NULL;
         OPT(CURLOPT_HEADERFUNCTION, upload_header);
         OPT(CURLOPT_HEADERDATA, reply);
         OPT(CURLOPT_CUSTOMREQUEST, upload->method);
@@ -345,7 +419,13 @@ static cJSON *request_extended(const char *url, const char *form, const char *ac
         }
     }
     if (form) { OPT(CURLOPT_POSTFIELDS, form); }
+    if (sink.file) media_trace("curl setup end",CURLE_OK,0,sink.count);
+    if (sink.file) media_trace("curl perform begin",CURLE_OK,0,sink.count);
     result = SDL_AtomicGet(&cancelled) ? CURLE_ABORTED_BY_CALLBACK : curl_easy_perform(curl);
+    if (sink.file) media_trace("curl perform end",result,0,sink.count);
+    if (sink.file) media_trace("curl getinfo begin",result,0,sink.count);
+    CURLcode status_result=curl_easy_getinfo(curl,CURLINFO_RESPONSE_CODE,status);
+    if (sink.file) media_trace("curl getinfo end",status_result==CURLE_OK?result:status_result,*status,sink.count);
     if (result != CURLE_OK) {
         failure = "transport";
         if (ca_context.problem) ca_request_failed = 1;
@@ -356,8 +436,7 @@ static cJSON *request_extended(const char *url, const char *form, const char *ac
         ca_context.problem = "TLS CA callback was not invoked";
         goto done;
     }
-    result = curl_easy_getinfo(curl, CURLINFO_RESPONSE_CODE, status);
-    if (result != CURLE_OK) { failure = "HTTP status lookup"; goto done; }
+    if (status_result != CURLE_OK) { result=status_result; failure = "HTTP status lookup"; goto done; }
     if (discovery && *status != 200) { failure = "HTTP"; goto done; }
     if (!sink.file) {
         const char *end = NULL;
@@ -368,8 +447,11 @@ static cJSON *request_extended(const char *url, const char *form, const char *ac
     }
 done:
     /* Keep callback/form/header storage alive until the easy handle is gone. */
+    if (sink.file) media_trace("curl cleanup begin",result,*status,sink.count);
     if (curl) curl_easy_cleanup(curl);
-    if (reply) { reply->transport = result; reply->status = *status; reply->downloaded = sink.count; }
+    if (sink.file) media_trace("curl cleanup end",result,*status,sink.count);
+    if (reply) { reply->transport = result; reply->status = *status; reply->downloaded = sink.count;
+        reply->write_error=sink.write_error; }
     if (discovery || ca_request_failed) {
         /* Public CA state only, even for authenticated requests; never emit
            their curl error buffers, request data, or response bodies. */
@@ -392,7 +474,7 @@ done:
     google_ca_free(&ca_context);
     wipe(error, sizeof(error));
     if (b.data) { wipe(b.data, RESPONSE_CAP + 1); free(b.data); }
-    wipe(auth, sizeof(auth));
+    if (auth) { wipe(auth,TOKEN_CAP+32); free(auth); }
     /* curl's header copy contains the access token. */
     for (struct curl_slist *p = headers; p; p = p->next) wipe(p->data, strlen(p->data));
     curl_slist_free_all(headers);
@@ -584,7 +666,9 @@ static void upload_request(void *data, const google_upload_request *q, google_up
     if (!strcmp(q->method,"PUT") && !google_upload_session_url(q->url)) {
         r->transport = CURLE_URL_MALFORMAT; return;
     }
+    if (q->download) media_trace("request dispatch begin",CURLE_OK,0,0);
     r->json = request_extended(q->url,NULL,auth->access,&status,q,r);
+    if (q->download) media_trace("request dispatch end",r->transport,r->status,r->downloaded);
 }
 static int restore_finish(void *unused) { (void)unused; return begin_commit(); }
 static int worker(void *unused)
@@ -690,8 +774,7 @@ static int worker(void *unused)
             download_handled = 1;
             if (result == GOOGLE_UPLOAD_SUCCESS && !begin_commit()) {
                 result = GOOGLE_UPLOAD_CANCELLED;
-                if (!google_backup_cleanup(&selected_backup.backup))
-                    snprintf(selected_backup.backup.diagnostic,sizeof(selected_backup.backup.diagnostic),"Temporary download cleanup failed.");
+                google_restore_log("download completion",110,0,0,0,"cancelled; validated ZIP retained",0);
             }
             if (result == GOOGLE_UPLOAD_SUCCESS) {
                 selected_ready=1; selected_backup.backup.user=current_user;
@@ -808,7 +891,7 @@ int google_drive_start(int action, uint32_t user)
         strcpy(browser_token,browser_page.next);
     }
     if (action == GOOGLE_BROWSE || action == GOOGLE_DOWNLOAD) {
-        if (!google_backup_cleanup(&selected_backup.backup)) return 0;
+        if (selected_ready && !google_backup_cleanup(&selected_backup.backup)) return 0;
     }
     SDL_AtomicSet(&cancelled, 0);
     if (action==GOOGLE_RESTORE || action==GOOGLE_REPLACE) selected_backup.backup.diagnostic[0]=0;
@@ -819,7 +902,9 @@ int google_drive_start(int action, uint32_t user)
     state.cancellable = action != GOOGLE_DISCONNECT && action != GOOGLE_RECOVER;
     strcpy(state.message, "Contacting Google...");
     SDL_UnlockMutex(lock);
-    thread = SDL_CreateThread(worker, "google_drive", NULL);
+    /* libcurl and mbedTLS call back through this worker; reserve stack for the
+       nested TLS, progress and file I/O frames on the PS4 pthread backend. */
+    thread = SDL_CreateThreadWithStackSize(worker, "google_drive", 1024U*1024U, NULL);
     if (!thread) {
         SDL_LockMutex(lock); state.busy = 0; state.restore_ready=selected_ready;
         state.restore_backup=selected_backup.backup; SDL_UnlockMutex(lock);
@@ -831,7 +916,6 @@ int google_drive_download_start(unsigned index, uint32_t user)
 {
     google_drive_status s; google_drive_snapshot(&s);
     if (s.busy || s.mount_blocked || selected_ready || !s.browsing || browser_user!=user || index>=browser_page.count) return 0;
-    if (!google_backup_cleanup(&selected_backup.backup)) return 0;
     selected_backup=browser_page.entries[index];
     return google_drive_start(GOOGLE_DOWNLOAD,user);
 }
@@ -873,6 +957,6 @@ void google_drive_shutdown(void)
 {
     google_drive_cancel();
     if (thread) { SDL_WaitThread(thread, NULL); thread = NULL; }
-    google_backup_cleanup(&selected_backup.backup);
+    if (selected_ready) google_backup_cleanup(&selected_backup.backup);
     if (lock) { SDL_DestroyMutex(lock); lock = NULL; }
 }

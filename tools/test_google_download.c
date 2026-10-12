@@ -6,6 +6,7 @@
 #include <sys/stat.h>
 #include <zip.h>
 #include "google_download.h"
+#include "google_restore_log.h"
 static cJSON *metadata;
 static google_remote_backup remote;
 static int stop, mode, requests, refreshes, chunks;
@@ -114,20 +115,39 @@ int main(void) {
         google_remote_backup job=remote; stop=0; requests=chunks=0;
         int result=google_download_run(&job,&io);
         if (!mode) { assert(result==GOOGLE_UPLOAD_SUCCESS); assert(chunks>1); assert(!access(job.backup.archive,F_OK)); assert(google_backup_cleanup(&job.backup)); }
-        else { assert(result==(mode==2?GOOGLE_UPLOAD_CANCELLED:GOOGLE_UPLOAD_FAILED)); assert(!job.backup.temp_dir[0]);
+        else { assert(result==(mode==2?GOOGLE_UPLOAD_CANCELLED:GOOGLE_UPLOAD_FAILED));
+            assert(job.backup.temp_dir[0] && !access(job.backup.archive,F_OK));
             assert(strstr(job.backup.diagnostic,"op=")&&strstr(job.backup.diagnostic,"zip=")&&
-                strstr(job.backup.diagnostic,"native=")); }
+                strstr(job.backup.diagnostic,"native="));
+            assert(google_backup_cleanup(&job.backup)); }
     }
     /* A stopped transfer must leave no ready archive and a fresh attempt
        against the same Drive item must validate independently. */
     mode=1; stop=0; requests=chunks=0;
     google_remote_backup interrupted=remote;
     assert(google_download_run(&interrupted,&io)==GOOGLE_UPLOAD_FAILED);
-    assert(!interrupted.backup.temp_dir[0]);
+    char retained[sizeof(interrupted.backup.archive)];
+    strcpy(retained,interrupted.backup.archive);
+    assert(!access(retained,F_OK));
     mode=0; requests=chunks=0;
     assert(google_download_run(&interrupted,&io)==GOOGLE_UPLOAD_SUCCESS);
-    assert(chunks>1 && !access(interrupted.backup.archive,F_OK));
+    assert(chunks>1 && !access(interrupted.backup.archive,F_OK) && !access(retained,F_OK));
+    google_backup old={0}; strcpy(old.archive,retained);
+    size_t prefix=(size_t)(strrchr(old.archive,'/')-old.archive);
+    memcpy(old.temp_dir,old.archive,prefix); old.temp_dir[prefix]=0;
+    assert(google_backup_cleanup(&old));
     assert(google_backup_cleanup(&interrupted.backup));
+    google_restore_log("obsolete marker",999,0,0,0,"older attempt",0);
+    mode=4; requests=chunks=0;
+    google_remote_backup later=remote;
+    assert(google_download_run(&later,&io)==GOOGLE_UPLOAD_FAILED);
+    FILE *attempt_log=fopen("build/host/google_restore.log","rb"); assert(attempt_log);
+    char log_text[8192]; size_t log_size=fread(log_text,1,sizeof(log_text)-1,attempt_log);
+    log_text[log_size]=0; assert(!fclose(attempt_log));
+    assert(strstr(log_text,"restore attempt=")==log_text);
+    assert(strstr(log_text,"Drive media transfer") && !strstr(log_text,"obsolete marker"));
+    assert(!access(later.backup.archive,F_OK));
+    assert(google_backup_cleanup(&later.backup));
     mode=0; stop=0; requests=chunks=0;
     assert(google_download_recheck(&remote,&io) && requests==1 && !chunks);
     saved=cJSON_Duplicate(metadata,1); change("gameName","Changed game");
@@ -139,7 +159,8 @@ int main(void) {
         google_remote_backup job=remote; stop=0; requests=chunks=0;
         int result=google_download_run(&job,&io);
         if (mode==13) { assert(result==GOOGLE_UPLOAD_SUCCESS); assert(google_backup_cleanup(&job.backup)); }
-        else { assert(result==GOOGLE_UPLOAD_FAILED); assert(!job.backup.temp_dir[0]); if (mode<=11) assert(!chunks); }
+        else { assert(result==GOOGLE_UPLOAD_FAILED); if (mode<=11) assert(!chunks);
+            if (job.backup.temp_dir[0]) assert(google_backup_cleanup(&job.backup)); }
     }
     mode=0; stop=0;
     google_remote_backup first=remote, second=remote; requests=0;

@@ -47,6 +47,7 @@ static int wrong_backend, skip_ca_callback, null_ca_context;
 static const char *response_headers;
 static uint64_t expected_offset, streamed;
 static int stream_test;
+static int media_interrupt;
 static int stage_allowed, stage_calls, token_reads;
 
 #if MBEDTLS_VERSION_NUMBER >= 0x03000000
@@ -184,6 +185,10 @@ static CURLcode mock_perform(CURL *curl)
         return r->result;
     }
     size_t n = strlen(r->json);
+    if (media_interrupt) {
+        assert(n>=3 && h->receive((void*)r->json,1,3,h->buffer)==3);
+        return CURLE_RECV_ERROR;
+    }
     return h->receive((void*)r->json, 1, n, h->buffer) == n ? CURLE_OK : CURLE_WRITE_ERROR;
 }
 static CURLcode mock_getinfo(CURL *curl, CURLINFO info, long *out)
@@ -292,7 +297,7 @@ static void reset(int action)
     SDL_AtomicSet(&cancelled, 0);
     fail_option = 0; fail_getinfo = 0; ca_exists = ca_readable = 1; mock_error_text = NULL;
     wrong_backend = skip_ca_callback = null_ca_context = 0;
-    response_headers=NULL; stream_test=0;
+    response_headers=NULL; stream_test=media_interrupt=0;
     stage_allowed=stage_calls=token_reads=0;
 }
 static void add(long status, const char *json) { replies[reply_count++] = (reply){status, json, CURLE_OK, 0}; }
@@ -458,24 +463,36 @@ int main(void)
     result=request_extended(get.url,NULL,"synthetic-access",&http,&get,&response);
     assert(!result && http==200 && response.transport==CURLE_OK && response.downloaded==6);
     assert(state.completed_bytes==6 && state.total_bytes==6);
+    FILE *boundary=fopen("build/host/google_restore.log.boundary","rb"); assert(boundary);
+    char boundary_text[192]={0}; assert(fgets(boundary_text,sizeof(boundary_text),boundary));
+    assert(strstr(boundary_text,"write callback return") && strstr(boundary_text,"bytes=6"));
+    assert(!fclose(boundary));
     assert(!fflush(download)); rewind(download); char bytes[7]={0};
     assert(fread(bytes,1,6,download)==6 && !strcmp(bytes,"abcdef"));
+    reset(GOOGLE_CHECK); media_interrupt=1; add(200,"abcdef");
+    memset(&response,0,sizeof(response));
+    result=request_extended(get.url,NULL,"synthetic-access",&http,&get,&response);
+    assert(!result && response.transport==CURLE_RECV_ERROR && response.status==200 && response.downloaded==3);
+    assert(!ferror(download) && !fclose(download));
+    download=fopen("build/host/download-transport.bin","rb+"); assert(download);
+    get.download=download; media_interrupt=0;
     reset(GOOGLE_CHECK); add(200,"toolong");
     result=request_extended(get.url,NULL,"synthetic-access",&http,&get,&response);
     assert(!result && response.transport==CURLE_WRITE_ERROR && !response.downloaded);
     SDL_AtomicSet(&cancelled,1);
-    download_stream sink={download,0,6};
+    download_stream sink={.file=download,.limit=6};
     assert(!download_write(bytes,1,6,&sink));
     SDL_AtomicSet(&cancelled,0);
     assert(!download_write(bytes,SIZE_MAX,2,&sink));
     fclose(download); download=fopen("build/host/download-transport.bin","rb"); assert(download);
-    sink=(download_stream){download,0,6}; assert(!download_write(bytes,1,6,&sink));
+    sink=(download_stream){.file=download,.limit=6}; assert(!download_write(bytes,1,6,&sink));
+    assert(sink.write_error);
     fclose(download); assert(!remove("build/host/download-transport.bin"));
     const char *status_line="HTTP/1.1 200 OK\r\n";
     upload_header((void*)status_line,1,strlen(status_line),&headers);
     assert(!headers.invalid_headers && !headers.location[0]);
     SDL_AtomicSet(&cancelled,1);
-    upload_stream stream={&upload,1};
+    upload_stream stream={.request=&upload,.remaining=1};
     char byte;
     assert(stream_read(&byte,1,1,&stream)==CURL_READFUNC_ABORT);
 
