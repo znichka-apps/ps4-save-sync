@@ -1,7 +1,6 @@
 /* Real mbedTLS parser/config, mocked backend and bounded-file failure injection. */
 #include <assert.h>
 #include <errno.h>
-#include <stdarg.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -10,7 +9,7 @@
 #include "google_ca.h"
 
 static const char *fixture = "assets/google/cacert.pem";
-static int wrong_backend, fail_open, fail_allocation, fail_read, fail_close, no_progress, fail_reuse;
+static int wrong_backend, fail_open, fail_allocation, fail_read, fail_close, no_progress;
 static int opened, closed, read_calls;
 static size_t short_read;
 static curl_version_info_data *mock_version(CURLversion age)
@@ -42,15 +41,10 @@ static void *mock_allocate(size_t n)
     assert(n == GOOGLE_CA_MAX_BYTES + 1);
     return fail_allocation ? NULL : malloc(n);
 }
-#undef curl_easy_setopt
-static CURLcode mock_setopt(CURL *curl, CURLoption option, ...)
-{
-    assert(curl && option == CURLOPT_FORBID_REUSE);
-    va_list ap; va_start(ap, option); assert(va_arg(ap, long) == 1); va_end(ap);
-    return fail_reuse ? CURLE_UNKNOWN_OPTION : CURLE_OK;
-}
 #define curl_version_info mock_version
-#define curl_easy_setopt mock_setopt
+/* The SSL callback must not mutate the handle while curl_easy_perform runs. */
+#undef curl_easy_setopt
+#define curl_easy_setopt(...) forbidden_setopt_inside_ssl_callback
 #define fopen mock_open
 #define fread mock_read
 #define ferror mock_error
@@ -74,7 +68,7 @@ static CURLcode mock_setopt(CURL *curl, CURLoption option, ...)
 static void reset(void)
 {
     fixture = "assets/google/cacert.pem";
-    wrong_backend = fail_open = fail_allocation = fail_read = fail_close = no_progress = fail_reuse = 0;
+    wrong_backend = fail_open = fail_allocation = fail_read = fail_close = no_progress = 0;
     opened = closed = read_calls = 0; short_read = 0;
 }
 static void write_fixture(const char *name, const char *data, size_t size)
@@ -143,12 +137,6 @@ int main(void)
     reset(); fixture = "build/host/ca-partial.pem";
     google_ca_init(&ca); assert(google_ca_load(&ca) == CURLE_SSL_CACERT_BADFILE && ca.parser_result > 0 && !ca.loaded);
     google_ca_free(&ca);
-    reset(); google_ca_init(&ca); assert(google_ca_load(&ca) == CURLE_OK);
-    mbedtls_ssl_config_init(&config); before = config;
-    fail_reuse = 1;
-    assert(google_ca_ssl_context((CURL*)1, &config, &ca) == CURLE_UNKNOWN_OPTION && !ca.attached);
-    assert(!memcmp(&before, &config, sizeof(config)));
-    mbedtls_ssl_config_free(&config); google_ca_free(&ca);
     google_ca_init(&ca); mbedtls_ssl_config_init(&config);
     assert(google_ca_ssl_context((CURL*)1, &config, &ca) == CURLE_SSL_CACERT_BADFILE);
     mbedtls_ssl_config_free(&config); google_ca_free(&ca);

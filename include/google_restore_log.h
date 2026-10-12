@@ -6,6 +6,9 @@
    the caller immediately after the operation, before cleanup can change errno. */
 void google_restore_log(const char *stage, int op, int error, int zip_error,
     int native, const char *call, int failed);
+void google_restore_begin_attempt(void);
+void google_restore_boundary(const char *step, int curl_result, long http_status,
+    unsigned long long bytes);
 void google_restore_last_failure(char *out, size_t capacity);
 void google_restore_clear_failure(void);
 #endif

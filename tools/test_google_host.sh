@@ -56,7 +56,7 @@ build/host/test_google_restore_stage
 
 cc -std=gnu11 -Wall -Wextra -Werror -fsanitize=address,undefined -g \
   -DGOOGLE_REPLACE_ROOT='"/tmp/ps4-save-sync-replace-test/"' -Iinclude \
-  tools/test_google_replace.c source/google_replace.c -o build/host/test_google_replace
+  tools/test_google_replace.c source/google_replace.c -Wl,--wrap=rename -o build/host/test_google_replace
 build/host/test_google_replace
 cc -std=gnu11 -Wall -Wextra -Werror -D__PS4__ \
   -Itools/restore_host_include -Itools/host_include -Iinclude \

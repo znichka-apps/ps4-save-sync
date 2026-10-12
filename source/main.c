@@ -8,7 +8,12 @@
 #include <unistd.h>
 #include <dirent.h>
 #include <stdbool.h>
+#include <errno.h>
+#include <fcntl.h>
+#include <sys/stat.h>
+#include <time.h>
 #include <orbis/Sysmodule.h>
+#include <orbis/libkernel.h>
 #include <orbis/AudioOut.h>
 #include <orbis/CommonDialog.h>
 #include <orbis/Sysmodule.h>
@@ -509,6 +514,44 @@ static void startup_marker(const char* stage)
 	LOG("Startup: %s", stage);
 }
 
+/* Written before SDL or the app data mount is initialized. If the file cannot
+ * be opened yet, the same bounded line still goes to the kernel debug output.
+ * A missing file after a launch of this build means main was not reached or
+ * neither output was available; the old startup_stage.txt is not evidence. */
+#define STARTUP_BUILD_ID "launch-ci-sdl-llvm12-20261011-a"
+static void startup_probe(const char* stage, int result)
+{
+	static int file_started;
+	static time_t run_time;
+	if (!run_time) run_time = time(NULL);
+	int saved = errno;
+	char line[192];
+	int n = snprintf(line, sizeof(line), "build=%s run=%lld-%ld stage=%s result=%d errno=%d\n",
+		STARTUP_BUILD_ID, (long long)run_time, (long)getpid(), stage, result, saved);
+	if (n <= 0 || (size_t)n >= sizeof(line)) return;
+	sceKernelDebugOutText(0, line);
+	int fd = open(APOLLO_PATH "startup_probe.txt",
+		O_WRONLY | O_CREAT | (file_started ? O_APPEND : O_TRUNC), 0600);
+	if (fd < 0 && errno == ENOENT) {
+		(void)mkdir(APOLLO_PATH, 0700);
+		fd = open(APOLLO_PATH "startup_probe.txt",
+			O_WRONLY | O_CREAT | (file_started ? O_APPEND : O_TRUNC), 0600);
+	}
+	if (fd >= 0) {
+		size_t offset = 0;
+		while (offset < (size_t)n) {
+			ssize_t written = write(fd, line + offset, (size_t)n - offset);
+			if (written < 0 && errno == EINTR) continue;
+			if (written <= 0) break;
+			offset += (size_t)written;
+		}
+		if (offset == (size_t)n) file_started = 1;
+		(void)fsync(fd);
+		(void)close(fd);
+	}
+	errno = saved;
+}
+
 static int initInternal(void)
 {
     // load common modules
@@ -539,6 +582,8 @@ static int initInternal(void)
 */
 s32 main(s32 argc, const char* argv[])
 {
+	sceKernelDebugOutText(0, "build=" STARTUP_BUILD_ID " stage=main.entry\n");
+	startup_probe("main.enter", 0);
 #ifdef APOLLO_ENABLE_LOGGING
 	// Frame tracking info for debugging
 	uint32_t lastFrameTicks  = 0;
@@ -550,26 +595,39 @@ s32 main(s32 argc, const char* argv[])
 
 	// Initialize SDL functions
 	LOG("Initializing SDL");
-	if (SDL_Init(SDL_INIT_VIDEO) != SUCCESS)
+	startup_probe("SDL_Init.begin", 0);
+	int startup_result = SDL_Init(SDL_INIT_VIDEO);
+	startup_probe("SDL_Init.end", startup_result);
+	if (startup_result != SUCCESS)
 	{
 		LOG("Failed to initialize SDL: %s", SDL_GetError());
 		return (-1);
 	}
 
-	initInternal();
-	http_init();
+	startup_probe("initInternal.begin", 0);
+	startup_result = initInternal();
+	startup_probe("initInternal.end", startup_result);
+	startup_probe("http_init.begin", 0);
+	startup_result = http_init();
+	startup_probe("http_init.end", startup_result);
+	startup_probe("initPad.begin", 0);
 	initPad();
+	startup_probe("initPad.end", 0);
 
 	// Initialize audio output library
+	startup_probe("audio_init.begin", 0);
 	if (sceSysmoduleLoadModuleInternal(ORBIS_SYSMODULE_INTERNAL_AUDIOOUT) < 0 ||
 		sceAudioOutInit() != SUCCESS)
 	{
+		startup_probe("audio_init.failed", -1);
 		LOG("[ERROR] Failed to initialize audio output");
 		return (-1);
 	}
+	startup_probe("audio_init.end", 0);
 
 	// Open a handle to audio output device
 	audio = sceAudioOutOpen(ORBIS_USER_SERVICE_USER_ID_SYSTEM, ORBIS_AUDIO_OUT_PORT_TYPE_MAIN, 0, AUDIO_SAMPLES, SAMPLING_FREQ, ORBIS_AUDIO_OUT_PARAM_FORMAT_S16_STEREO);
+	startup_probe("audio_open.end", audio);
 
 	if (audio <= 0)
 	{
@@ -579,66 +637,90 @@ s32 main(s32 argc, const char* argv[])
 
 	// Create a window context
 	LOG( "Creating a window");
+	startup_probe("window.begin", 0);
 	window = SDL_CreateWindow("main", SDL_WINDOWPOS_UNDEFINED, SDL_WINDOWPOS_UNDEFINED, SCREEN_WIDTH, SCREEN_HEIGHT, 0);
+	startup_probe("window.end", window != NULL);
 	if (!window) {
 		LOG("SDL_CreateWindow: %s", SDL_GetError());
 		return (-1);
 	}
 
 	// Create a renderer (OpenGL ES2)
+	startup_probe("renderer.begin", 0);
 	renderer = SDL_CreateRenderer(window, 0, SDL_RENDERER_ACCELERATED | SDL_RENDERER_PRESENTVSYNC);
+	startup_probe("renderer.end", renderer != NULL);
 	if (!renderer) {
 		LOG("SDL_CreateRenderer: %s", SDL_GetError());
 		return (-1);
 	}
 
 	// Initialize jailbreak
+	startup_probe("data_mount.begin", 0);
 	if (!initialize_jbc() || !initVshDataMount())
 	{
+		startup_probe("data_mount.failed", -1);
 		notify_popup(NOTIFICATION_ICON_BAN, "Failed to initialize jailbreak!");
 		terminate();
 	}
+	startup_probe("data_mount.end", 0);
 
 	mkdirs(APOLLO_DATA_PATH);
 	mkdirs(APOLLO_LOCAL_CACHE);
+	startup_probe("data_dirs.end", 0);
 	startup_marker("data directories ready");
 	
 	// Load freetype
+	startup_probe("freetype.begin", 0);
 	if (sceSysmoduleLoadModule(ORBIS_SYSMODULE_FREETYPE_OL) < 0)
 	{
+		startup_probe("freetype.failed", -1);
 		LOG("Failed to load freetype!");
 		return (-1);
 	}
+	startup_probe("freetype.end", 0);
 
 	// Load MsgDialog
+	startup_probe("dialog_modules.begin", 0);
 	if (sceSysmoduleLoadModule(ORBIS_SYSMODULE_MESSAGE_DIALOG) < 0 ||
 		sceSysmoduleLoadModule(ORBIS_SYSMODULE_IME_DIALOG) < 0)
 	{
+		startup_probe("dialog_modules.failed", -1);
 		LOG("Failed to load dialog!");
 		return (-1);
 	}
+	startup_probe("dialog_modules.end", 0);
 
+	startup_probe("common_dialog.begin", 0);
 	if (sceSysmoduleLoadModuleInternal(ORBIS_SYSMODULE_INTERNAL_COMMON_DIALOG) < 0 ||
 		sceCommonDialogInitialize() < 0)
 	{
+		startup_probe("common_dialog.failed", -1);
 		LOG("Failed to init CommonDialog!");
 		return (-1);
 	}
+	startup_probe("common_dialog.end", 0);
 
 	// register exit callback
 	atexit(terminate);
 	
 	// Load texture
+	startup_probe("menu_textures.begin", 0);
 	if (!LoadTextures_Menu())
 	{
+		startup_probe("menu_textures.failed", -1);
 		LOG("Failed to load menu textures!");
 		return (-1);
 	}
+	startup_probe("menu_textures.end", 0);
 	startup_marker("menu textures loaded");
 
+	startup_probe("localization.begin", 0);
 	initLocalization();
+	startup_probe("localization.end", 0);
 	// Load application settings
+	startup_probe("settings.begin", 0);
 	load_app_settings(&apollo_config);
+	startup_probe("settings.end", 0);
 
 	if (apollo_config.dbglog)
 	{
@@ -649,6 +731,7 @@ s32 main(s32 argc, const char* argv[])
 	// Unpack application data on first run
 	if (strncmp(apollo_config.app_ver, APOLLO_VERSION, sizeof(apollo_config.app_ver)) != 0)
 	{
+		startup_probe("appdata_unpack.begin", 0);
 		LOG("Unpacking application data...");
 //		clean_directory(APOLLO_DATA_PATH);
 		if (extract_zip(APOLLO_APP_PATH "misc/appdata.zip", APOLLO_DATA_PATH))
@@ -656,6 +739,7 @@ s32 main(s32 argc, const char* argv[])
 
 		strncpy(apollo_config.app_ver, APOLLO_VERSION, sizeof(apollo_config.app_ver));
 		save_app_settings(&apollo_config);
+		startup_probe("appdata_unpack.end", 0);
 	}
 
 	// dedicated to Leon & Luna ~ in loving memory
@@ -665,7 +749,9 @@ s32 main(s32 argc, const char* argv[])
 	SetCurrentFont(font_adonais_regular);
 
 	registerSpecialChars();
+	startup_probe("menu_init.begin", 0);
 	initMenuOptions();
+	startup_probe("menu_init.end", 0);
 	startup_marker("menu initialized");
 
 	// Start BGM audio thread
@@ -699,6 +785,7 @@ s32 main(s32 argc, const char* argv[])
 		SDL_RenderPresent(renderer);
 		if (!first_frame_presented)
 		{
+			startup_probe("first_frame.end", 0);
 			startup_marker("first menu frame presented");
 			first_frame_presented = 1;
 		}

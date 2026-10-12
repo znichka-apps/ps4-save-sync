@@ -101,9 +101,18 @@ done: cJSON_Delete(j); return ok;
 static int call(const google_upload_io *io, google_upload_request *q, google_upload_response *r) {
     memset(r,0,sizeof(*r)); io->request(io->data,q,r);
     if (r->transport==CURLE_OK && r->status==401 && !io->cancelled(io->data)) {
+        if (q->download) google_restore_log("Drive media transfer",105,0,0,0,"401 retry reset begin",0);
         cJSON_Delete(r->json); memset(r,0,sizeof(*r));
         if (!io->refresh(io->data)) return 0;
-        if (q->download && (fflush(q->download) || ftruncate(fileno(q->download),0) || fseeko(q->download,0,SEEK_SET))) return 0;
+        if (q->download) {
+            if (fflush(q->download) || ftruncate(fileno(q->download),0) || fseeko(q->download,0,SEEK_SET)) {
+                int error=errno;
+                google_restore_log("Drive media transfer",105,error,0,0,"401 retry reset end",1);
+                errno=error; return 0;
+            }
+            clearerr(q->download);
+            google_restore_log("Drive media transfer",105,0,0,0,"401 retry reset end",0);
+        }
         io->request(io->data,q,r);
     }
     return r->transport==CURLE_OK && r->status==200 && !r->invalid_headers && !io->cancelled(io->data);
@@ -139,11 +148,13 @@ static uint64_t u32(const unsigned char *p) { return u16(p) | (uint64_t)u16(p+2)
 /* Check raw central/local names as well: C string APIs can hide embedded NULs.
    This v1 reader deliberately rejects ZIP64, multi-disk and trailing data. */
 static int raw_names(FILE *f, int (*cancel)(void*), void *data) {
-    unsigned char tail[65557], header[46], local[30], name[1024], local_name[1024];
+    unsigned char *tail=malloc(65557);
+    unsigned char header[46], local[30], name[1024], local_name[1024];
     int ok=0;
+    if (!tail) return 0;
     if (fseeko(f,0,SEEK_END)) goto done;
     off_t length=ftello(f); if (length<22) goto done;
-    size_t size=length>(off_t)sizeof(tail)?sizeof(tail):(size_t)length;
+    size_t size=length>65557?65557:(size_t)length;
     if (fseeko(f,length-size,SEEK_SET) || fread(tail,1,size,f)!=size) goto done;
     size_t end=size-22;
     while (memcmp(tail+end,"PK\005\006",4)) { if (!end) goto done; end--; }
@@ -169,10 +180,12 @@ static int raw_names(FILE *f, int (*cancel)(void*), void *data) {
         position+=46+n+extra+comment;
     }
     ok=position==offset+central;
-done: return ok;
+done: free(tail); return ok;
 }
 static int zip_entries(zip_t *z, const google_backup *b, int (*cancel)(void*), void *data, int *error) {
     int ok=0, files=0, sfo=0; uint64_t expanded=0;
+    unsigned char *buffer=malloc(16384);
+    if (!buffer) goto done;
     zip_int64_t count=zip_get_num_entries(z,0);
     if (count<=0 || count>4096) goto done;
     for (zip_uint64_t i=0;i<(zip_uint64_t)count;i++) {
@@ -204,8 +217,8 @@ static int zip_entries(zip_t *z, const google_backup *b, int (*cancel)(void*), v
         char required[128]; snprintf(required,sizeof(required),"%s/sce_sys/param.sfo",b->directory);
         if (!strcmp(name,required) && st.size) sfo=1;
         zip_file_t *f=zip_fopen_index(z,i,0); if (!f) goto done;
-        unsigned char buffer[16384]; zip_int64_t n; uint64_t read=0; int valid=1;
-        while ((n=zip_fread(f,buffer,sizeof(buffer)))>0) {
+        zip_int64_t n; uint64_t read=0; int valid=1;
+        while ((n=zip_fread(f,buffer,16384))>0) {
             if (cancel(data) || (uint64_t)n>st.size-read) { valid=0; break; }
             read+=(uint64_t)n;
         }
@@ -219,7 +232,7 @@ done:
         *error=zip_error_code_zip(zip_get_error(z));
         if (!*error) *error=cancel(data)?ZIP_ER_CANCELLED:ZIP_ER_INCONS;
     }
-    zip_discard(z); return ok;
+    free(buffer); zip_discard(z); return ok;
 }
 int google_download_zip_fd(const google_backup *b, int fd, int (*cancel)(void*), void *data, int *error) {
     *error=0;
@@ -277,7 +290,7 @@ int google_download_run(google_remote_backup *remote, const google_upload_io *io
     char url[256]; FILE *fp=NULL; int op=100, failure_errno=0, zip_error=0;
     const char *stage="download input", *call_name="id/cancel";
     b->diagnostic[0]=0;
-    google_restore_clear_failure();
+    google_restore_begin_attempt();
     google_restore_log("download",100,0,0,0,"start",0);
     if (!id(remote->id) || io->cancelled(io->data)) { failure_errno=errno; goto done; }
     google_restore_log("download input",op,0,0,0,call_name,0);
@@ -298,10 +311,29 @@ int google_download_run(google_remote_backup *remote, const google_upload_io *io
     snprintf(url,sizeof(url),FILES "/%s?alt=media",remote->id);
     google_upload_request q={.method="GET",.url=url,.download=fp,.total=b->size};
     op=105; stage="Drive media transfer"; call_name="files.get media/fflush";
-    if (!call(io,&q,&r) || r.downloaded!=b->size || fflush(fp) || ferror(fp)) { failure_errno=errno; goto done; }
+    google_restore_log(stage,op,0,0,0,"files.get media start",0);
+    int transfer_ok=call(io,&q,&r);
+    char transfer_detail[96];
+    snprintf(transfer_detail,sizeof(transfer_detail),"perform returned curl=%d http=%ld bytes=%llu",
+        (int)r.transport,r.status,(unsigned long long)r.downloaded);
+    google_restore_log(stage,op,0,0,0,transfer_detail,!transfer_ok);
+    if (!transfer_ok || r.downloaded!=b->size || r.write_error) {
+        failure_errno=r.write_error ? r.write_error : errno; goto done;
+    }
+    google_restore_log(stage,op,0,0,0,"fflush begin",0);
+    int flush_result=fflush(fp); failure_errno=flush_result?errno:0;
+    google_restore_log(stage,op,failure_errno,0,0,"fflush end",flush_result!=0);
+    if (flush_result || ferror(fp)) { if (!failure_errno) failure_errno=EIO; goto done; }
+    google_restore_log(stage,op,0,0,0,"fsync begin",0);
+    int sync_result=fsync(fileno(fp)); failure_errno=sync_result?errno:0;
+    google_restore_log(stage,op,failure_errno,0,0,"fsync end",sync_result!=0);
+    if (sync_result) goto done;
     google_restore_log(stage,op,0,0,0,call_name,0);
     op=106; stage="archive close"; call_name="fclose";
-    if (fclose(fp)) { failure_errno=errno; fp=NULL; goto done; } fp=NULL;
+    google_restore_log(stage,op,0,0,0,"fclose begin",0);
+    int close_result=fclose(fp); failure_errno=close_result?errno:0; fp=NULL;
+    google_restore_log(stage,op,failure_errno,0,0,"fclose end",close_result!=0);
+    if (close_result) goto done;
     google_restore_log(stage,op,0,0,0,call_name,0);
     google_backup hash=*b;
     op=107; stage="download checksum"; call_name="google_backup_hash";
@@ -321,14 +353,21 @@ int google_download_run(google_remote_backup *remote, const google_upload_io *io
 done:
     if (result!=GOOGLE_UPLOAD_SUCCESS) {
         char detail[80];
-        snprintf(detail,sizeof(detail),"%s http=%ld curl=%d",call_name,r.status,(int)r.transport);
+        snprintf(detail,sizeof(detail),"%s http=%ld curl=%d bytes=%llu",call_name,r.status,(int)r.transport,
+            (unsigned long long)r.downloaded);
         google_restore_log(stage,op,failure_errno,zip_error,0,detail,1);
         if (!b->diagnostic[0]) google_restore_last_failure(b->diagnostic,sizeof(b->diagnostic));
     }
-    cJSON_Delete(r.json); if (fp) fclose(fp);
+    cJSON_Delete(r.json);
+    if (fp) {
+        google_restore_log("download cleanup",109,0,0,0,"fclose partial begin",0);
+        int close_result=fclose(fp); int close_error=close_result?errno:0;
+        google_restore_log("download cleanup",109,close_error,0,0,"fclose partial end",close_result!=0);
+        if (close_result && !failure_errno) failure_errno=close_error;
+    }
     if (result!=GOOGLE_UPLOAD_SUCCESS) {
         if (io->cancelled(io->data)) result=GOOGLE_UPLOAD_CANCELLED;
-        if (!google_backup_cleanup(b)) { int error=errno; google_restore_log("download cleanup",109,error,zip_error,0,"google_backup_cleanup",1); snprintf(b->diagnostic,sizeof(b->diagnostic),"Temporary download cleanup failed [op=109 errno=%d zip=%d native=0].",error,zip_error); }
+        google_restore_log("download cleanup",109,0,zip_error,0,"partial ZIP retained",0);
     }
     errno=failure_errno;
     return result;

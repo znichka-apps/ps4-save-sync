@@ -17,7 +17,8 @@
 
 #define JOURNAL_MAGIC 0x52505347u
 #define JOURNAL_VERSION 1u
-enum { PREPARED=1, UPLOADED, DELETING, IMPORTING, RECOVERING, COMPLETE, RECOVERED, RECOVERY_FAILED };
+enum { PREPARED=1, UPLOADED, DELETING, IMPORTING, RECOVERING, COMPLETE, RECOVERED,
+       RECOVERY_FAILED, VERIFIED, ROLLBACK_VERIFIED };
 typedef struct {
     uint32_t magic, version, phase, user;
     uint64_t source_size, rollback_size;
@@ -64,7 +65,7 @@ static int valid_md5(const char *s)
 static int valid_record(const journal *j)
 {
     if (j->magic!=JOURNAL_MAGIC || j->version!=JOURNAL_VERSION ||
-        j->phase<PREPARED || j->phase>RECOVERY_FAILED || !j->user ||
+        j->phase<PREPARED || j->phase>ROLLBACK_VERIFIED || !j->user ||
         !j->source_size || !j->rollback_size || checksum(j)!=j->checksum ||
         !memchr(j->title,0,sizeof(j->title)) || !memchr(j->directory,0,sizeof(j->directory)) ||
         !memchr(j->game,0,sizeof(j->game)) || !memchr(j->source_utc,0,sizeof(j->source_utc)) ||
@@ -271,10 +272,18 @@ static int recover_record(const char *dir,journal *j,const google_replace_io *io
     int saved_errno;
     rollback_status(j->user,"rollback ZIP validation",validated,-1,rollback.diagnostic);
     if (validated!=GOOGLE_UPLOAD_SUCCESS) return GOOGLE_REPLACE_NEEDS_RECOVERY;
-    if (j->phase==PREPARED || j->phase==UPLOADED) {
-        int present=io->present(io->data,&rollback);
-        rollback_status(j->user,"rollback preflight presence",present,-1,NULL);
-        if (present==1) {
+    int present=io->present(io->data,&rollback);
+    rollback_status(j->user,"rollback preflight presence",present,-1,NULL);
+    if (present<0) return GOOGLE_REPLACE_NEEDS_RECOVERY;
+    if (present==1) {
+        if (j->phase==VERIFIED || j->phase==ROLLBACK_VERIFIED) {
+            int restored=j->phase==ROLLBACK_VERIFIED;
+            j->phase=restored?RECOVERED:COMPLETE;
+            if (!write_journal(dir,j)) return GOOGLE_REPLACE_NEEDS_RECOVERY;
+            google_replace_phase(j->user,"journal cleanup","after retained");
+            return restored?GOOGLE_REPLACE_ROLLED_BACK:GOOGLE_REPLACE_SUCCESS;
+        }
+        if (j->phase==PREPARED || j->phase==UPLOADED) {
             google_replace_phase(j->user,"rollback","before");
             google_replace_phase(j->user,"rollback","after already present");
             j->phase=RECOVERED;
@@ -283,7 +292,10 @@ static int recover_record(const char *dir,journal *j,const google_replace_io *io
             google_replace_phase(j->user,"journal cleanup","after retained");
             return GOOGLE_REPLACE_ROLLED_BACK;
         }
-        if (present<0) return GOOGLE_REPLACE_NEEDS_RECOVERY;
+        /* Once deletion has begun, presence does not prove whether this is
+           the old save, a partial import, or a completed import. Keep it. */
+        google_replace_phase(j->user,"rollback","target present; identity uncertain");
+        return GOOGLE_REPLACE_TARGET_PRESENT;
     }
     j->phase=RECOVERING;
     int checkpoint=write_journal(dir,j);
@@ -291,18 +303,19 @@ static int recover_record(const char *dir,journal *j,const google_replace_io *io
     rollback_status(j->user,"rollback journal checkpoint",checkpoint,saved_errno,NULL);
     if (!checkpoint) return GOOGLE_REPLACE_NEEDS_RECOVERY;
     google_replace_phase(j->user,"rollback","before");
-    int present=io->present(io->data,&rollback);
+    present=io->present(io->data,&rollback);
     rollback_status(j->user,"rollback target presence",present,-1,NULL);
     if (present<0) goto failed;
-    if (present==1) {
-        int deleted=io->delete_target(io->data,&rollback);
-        rollback_status(j->user,"rollback target delete",deleted,-1,NULL);
-        if (!deleted) goto failed;
-    }
+    if (present==1) return GOOGLE_REPLACE_TARGET_PRESENT;
     int imported=io->import_archive(io->data,&rollback,1);
     rollback_status(j->user,"rollback ZIP import",imported,-1,rollback.diagnostic);
     if (!imported || rollback.mount_blocked) goto failed;
+    present=io->present(io->data,&rollback);
+    rollback_status(j->user,"rollback imported target presence",present,-1,NULL);
+    if (present!=1) goto failed;
     google_replace_phase(j->user,"rollback","after ok");
+    j->phase=ROLLBACK_VERIFIED;
+    if (!write_journal(dir,j)) return GOOGLE_REPLACE_NEEDS_RECOVERY;
     j->phase=RECOVERED;
     if (!write_journal(dir,j)) return GOOGLE_REPLACE_NEEDS_RECOVERY;
     google_replace_phase(j->user,"journal cleanup","before");
@@ -398,7 +411,14 @@ int google_replace_start(google_backup *source,const google_replace_io *io)
         google_replace_phase(j.user,"import","after failed");
         goto rollback_attempt;
     }
+    if (io->present(io->data,source)!=1) {
+        google_replace_phase(j.user,"import verification","target absent or uncertain");
+        goto rollback_attempt;
+    }
+    google_replace_phase(j.user,"import verification","target present after unmount");
     google_replace_phase(j.user,"import","after ok");
+    j.phase=VERIFIED;
+    if (!write_journal(dir,&j)) { diagnostic(source,"save imported but verification journal failed; recovery pending"); return GOOGLE_REPLACE_NEEDS_RECOVERY; }
     j.phase=COMPLETE;
     if (!write_journal(dir,&j)) { diagnostic(source,"save imported but completion journal failed; recovery pending"); return GOOGLE_REPLACE_NEEDS_RECOVERY; }
     google_replace_phase(j.user,"journal cleanup","before");
@@ -413,7 +433,8 @@ rollback_attempt:
     }
     {
         int recovered=recover_record(dir,&j,io);
-        diagnostic(source,recovered==GOOGLE_REPLACE_ROLLED_BACK?"import failed; prior save restored":"import failed; recovery pending");
+        diagnostic(source,recovered==GOOGLE_REPLACE_ROLLED_BACK?"import failed; prior save restored":
+            recovered==GOOGLE_REPLACE_TARGET_PRESENT?"target present but identity uncertain; inspect before retry":"import failed; recovery pending");
         return recovered;
     }
 }

@@ -29,6 +29,9 @@ typedef struct {
     char location[2048], range[96];
     int invalid_headers;
     uint64_t downloaded;
+    int write_error;
+    int media;
+    unsigned header_callbacks;
     cJSON *json;
 } google_upload_response;
 typedef struct {

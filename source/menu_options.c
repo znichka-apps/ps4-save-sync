@@ -161,7 +161,7 @@ int google_drive_ui_frame(void)
     if (!status.busy && !status.mount_blocked && pending==1 &&
         orbisPadGetButtonPressed(ORBIS_PAD_BUTTON_R1)) {
         if (show_dialog(DIALOG_TYPE_YESNO,
-            "Retry best-effort recovery of %s/%s for user %08x?\nThe target may be partial. The retained rollback ZIP will be used. Power loss can still interrupt recovery.",
+            "Check recovery of %s/%s for user %08x?\nA present target will be preserved. If the target is absent, the retained rollback ZIP will be used. Power loss can interrupt recovery.",
             pending_backup.title,pending_backup.directory,apollo_config.user_id) &&
             !google_drive_start(GOOGLE_RECOVER,apollo_config.user_id))
             show_message("Unable to start recovery. Journal and ZIPs retained.");
@@ -231,7 +231,7 @@ int google_drive_ui_frame(void)
     if (!status.busy && pending==1) {
         DrawFormatString(180,690,"Recovery pending: %s / %s, user %08x",
             pending_backup.title,pending_backup.directory,apollo_config.user_id);
-        DrawString(180,750,"Target may be partial. Both ZIPs and journal are retained.");
+        DrawString(180,750,"Target may be partial. A present target will be preserved; ZIPs retained.");
         DrawFormatString(180,935,"R1: retry recovery    %c close",
             google_button_symbol(footer_ico_circle_png_index));
     } else if (!status.busy && pending<0) {
